@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <Windows.h>
 #include <cstdint>
 #include <string>
@@ -40,6 +40,38 @@ namespace KFMemory
     }
 
 
+
+    // ============================================================
+    // ESCRITURA SEGURA
+    // ============================================================
+
+    template <typename T>
+    inline bool Write(
+        uintptr_t address,
+        const T& value
+    )
+    {
+        if (address == 0)
+        {
+            return false;
+        }
+
+
+        __try
+        {
+            *reinterpret_cast<T*>(
+                address
+            ) = value;
+
+
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     // ============================================================
     // MODULOS
     // ============================================================
@@ -68,15 +100,15 @@ namespace KFMemory
     // FNAMES
     //
     // Core.dll + 0x166674
-    //     ↓
+    //     ?
     // Names.Data
     //
     // Names.Data[index]
-    //     ↓
+    //     ?
     // FNameEntry*
     //
     // FNameEntry + 0x0C
-    //     ↓
+    //     ?
     // texto Unicode
     // ============================================================
 

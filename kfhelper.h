@@ -7,6 +7,9 @@
 #include <cstdint>
 #include "kfplayer.h"
 #include "kfentities.h"
+#include "kfcamera.h"
+#include "kfesp.h"
+#include "kfoverlay.h"
 
 namespace KFHelper
 {
@@ -44,7 +47,12 @@ namespace KFHelper
             << "[+] DLL cargada correctamente\n"
             << "[+] K      = informacion del proceso\n"
             << "[+] P      = informacion del jugador\n"
-            << "[+] E      = entidades vivas\n" 
+            << "[+] E      = entidades vivas\n"
+            << "[+] R      = camera info\n"
+            << "[+] F6     = projection debug\n"
+            << "[+] F7     = ESP + AimFOV ON/OFF\n"
+            << "[+] F8     = head marker ON/OFF\n"
+            << "[+] Q hold = smooth aimbot\n"
             << "[+] DELETE = descargar DLL\n"
             << "========================================\n\n";
 
@@ -189,6 +197,120 @@ namespace KFHelper
     }
 
 
+    // ============================================================
+    // ROTATION PROBE
+    //
+    // Offsets candidatos tomados de AActor::GetViewRotation.
+    // Todavia NO se consideran confirmados.
+    // ============================================================
+
+    inline void PrintRotationProbe()
+    {
+        KFPlayer::Context context;
+
+        if (!KFPlayer::ResolveContext(context))
+        {
+            std::cout << "`n[ROTATION] No se pudo resolver el jugador local.`n";
+            return;
+        }
+
+        constexpr uintptr_t CandidatePitch = 0x158;
+        constexpr uintptr_t CandidateYaw   = 0x15C;
+        constexpr uintptr_t CandidateRoll  = 0x160;
+
+        int pawnPitch = 0;
+        int pawnYaw   = 0;
+        int pawnRoll  = 0;
+
+        int controllerPitch = 0;
+        int controllerYaw   = 0;
+        int controllerRoll  = 0;
+
+        const bool pawnPitchOk =
+            KFMemory::Read(
+                context.pawn + CandidatePitch,
+                pawnPitch
+            );
+
+        const bool pawnYawOk =
+            KFMemory::Read(
+                context.pawn + CandidateYaw,
+                pawnYaw
+            );
+
+        const bool pawnRollOk =
+            KFMemory::Read(
+                context.pawn + CandidateRoll,
+                pawnRoll
+            );
+
+        const bool controllerPitchOk =
+            KFMemory::Read(
+                context.controller + CandidatePitch,
+                controllerPitch
+            );
+
+        const bool controllerYawOk =
+            KFMemory::Read(
+                context.controller + CandidateYaw,
+                controllerYaw
+            );
+
+        const bool controllerRollOk =
+            KFMemory::Read(
+                context.controller + CandidateRoll,
+                controllerRoll
+            );
+
+        std::cout << "`n========================================`n";
+        std::cout << "          ROTATION PROBE`n";
+        std::cout << "========================================`n";
+
+        std::cout
+            << std::hex
+            << std::uppercase
+            << std::showbase;
+
+        std::cout
+            << "[Pawn]       "
+            << context.pawn
+            << '\n';
+
+        std::cout
+            << "[Controller] "
+            << context.controller
+            << '\n';
+
+        std::cout
+            << std::dec
+            << std::noshowbase
+            << std::nouppercase;
+
+        std::cout << "`n--- Pawn + 0x158 ---`n";
+
+        if (pawnPitchOk)
+            std::cout << "Pitch : " << pawnPitch << '\n';
+
+        if (pawnYawOk)
+            std::cout << "Yaw   : " << pawnYaw << '\n';
+
+        if (pawnRollOk)
+            std::cout << "Roll  : " << pawnRoll << '\n';
+
+        std::cout << "`n--- Controller + 0x158 ---`n";
+
+        if (controllerPitchOk)
+            std::cout << "Pitch : " << controllerPitch << '\n';
+
+        if (controllerYawOk)
+            std::cout << "Yaw   : " << controllerYaw << '\n';
+
+        if (controllerRollOk)
+            std::cout << "Roll  : " << controllerRoll << '\n';
+
+        std::cout << "========================================`n`n";
+    }
+
     inline void CloseConsole()
     {
         DWORD processList[16]{};
@@ -261,8 +383,54 @@ namespace KFHelper
                 KFEntities::PrintLivingEntities();
             }
 
-            if (GetAsyncKeyState(VK_DELETE) & 1)
+            if (GetAsyncKeyState('R') & 1)
             {
+                KFCamera::PrintCameraInfo();
+            }
+
+
+            if (GetAsyncKeyState(VK_F6) & 1)
+            {
+                KFESP::PrintProjectionDebug();
+            }
+
+
+            if (GetAsyncKeyState(VK_F7) & 1)
+            {
+                const bool active =
+                    KFOverlay::Toggle(
+                        dllModule
+                    );
+
+
+                std::cout
+                    << (
+                        active ?
+                        "\n[ESP] Overlay activado.\n" :
+                        "\n[ESP] Overlay desactivado.\n"
+                    );
+            }
+
+
+            if (GetAsyncKeyState(VK_F8) & 1)
+            {
+                const bool markerEnabled =
+                    KFOverlay::ToggleHeadMarker();
+
+
+                std::cout
+                    << "\n[ESP] Head marker: "
+                    << (
+                        markerEnabled ?
+                        "ON" :
+                        "OFF"
+                    )
+                    << '\n';
+            }
+
+if (GetAsyncKeyState(VK_DELETE) & 1)
+            {
+                KFOverlay::Stop();
                 break;
             }
 

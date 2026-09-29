@@ -44,6 +44,20 @@ namespace KFOffsets
     }
 
 
+    namespace Actor
+    {
+        // AActor::GetViewRotation
+        // Confirmados experimentalmente en nuestro build.
+        constexpr uintptr_t Pitch =
+            0x158;
+
+        constexpr uintptr_t Yaw =
+            0x15C;
+
+        constexpr uintptr_t Roll =
+            0x160;
+    }
+
     namespace Pawn
     {
         constexpr uintptr_t Level =
@@ -64,6 +78,13 @@ namespace KFOffsets
         constexpr uintptr_t Weapon =
             0x43C;
 
+        // Alturas visuales confirmadas experimentalmente.
+        constexpr uintptr_t BaseEyeHeight =
+            0x448;
+
+        constexpr uintptr_t EyeHeight =
+            0x44C;
+
         constexpr uintptr_t Health =
             0x480;
 
@@ -79,6 +100,11 @@ namespace KFOffsets
     {
         constexpr uintptr_t Pawn =
             0x360;
+
+        // FOV efectivo de la vista.
+        // Validado con comando FOV, ADS y Crossbow zoom.
+        constexpr uintptr_t FOV =
+            0x36C;
 
         constexpr uintptr_t PlayerReplicationInfo =
             0x490;

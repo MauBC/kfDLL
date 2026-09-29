@@ -36,3 +36,12 @@ x86/
 # Windows
 Thumbs.db
 Desktop.ini
+
+# Local development backups / diagnostics
+*.bak-*
+*.before-*
+BUILD_CHECK.txt
+KF_DLL_CODIGO_COMPLETO.txt
+KF_DLL_ESTRUCTURA.txt
+KF_LOS_RADIOGRAFIA.txt
+KF_RUNTIME_SYMBOLS.txt

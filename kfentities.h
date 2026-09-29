@@ -92,6 +92,9 @@ namespace KFEntities
         float x = 0.0f;
         float y = 0.0f;
         float z = 0.0f;
+
+        // Distancia 3D respecto al jugador local.
+        float distanceToLocal = 0.0f;
     };
 
 
@@ -534,6 +537,51 @@ namespace KFEntities
 
 
         // --------------------------------------------------------
+        // Posicion del jugador local.
+        //
+        // Solo se lee una vez antes de recorrer EntityList.
+        // --------------------------------------------------------
+
+        float localX = 0.0f;
+        float localY = 0.0f;
+        float localZ = 0.0f;
+
+
+        const bool localXOk =
+            KFMemory::Read(
+                localPawn +
+                KFOffsets::Pawn::X,
+                localX
+            );
+
+
+        const bool localYOk =
+            KFMemory::Read(
+                localPawn +
+                KFOffsets::Pawn::Y,
+                localY
+            );
+
+
+        const bool localZOk =
+            KFMemory::Read(
+                localPawn +
+                KFOffsets::Pawn::Z,
+                localZ
+            );
+
+
+        if (
+            !localXOk ||
+            !localYOk ||
+            !localZOk
+            )
+        {
+            return entities;
+        }
+
+
+        // --------------------------------------------------------
         // Obtener roster local.
         // --------------------------------------------------------
 
@@ -686,6 +734,28 @@ namespace KFEntities
 
 
             // ----------------------------------------------------
+            // Distancia 3D respecto al jugador local.
+            // ----------------------------------------------------
+
+            const float dx =
+                entity.x - localX;
+
+            const float dy =
+                entity.y - localY;
+
+            const float dz =
+                entity.z - localZ;
+
+
+            entity.distanceToLocal =
+                std::sqrt(
+                    dx * dx +
+                    dy * dy +
+                    dz * dz
+                );
+
+
+            // ----------------------------------------------------
             // ¿Está vivo?
             //
             // Para Health confiable:
@@ -700,15 +770,6 @@ namespace KFEntities
             //
             // Pawn con Health raro -> solo lo conservamos si tiene Controller.
             // Esto contempla el Gorefast raro de nuestro testmap.
-            if (
-                !entity.healthReliable &&
-                entity.controller == 0
-                )
-            {
-                continue;
-            }
-
-
             if (
                 !entity.healthReliable &&
                 entity.controller == 0
@@ -902,6 +963,14 @@ namespace KFEntities
             std::cout
                 << "      Z/Height : "
                 << entity.z
+                << '\n';
+
+
+            std::cout
+                << "      Distance : "
+                << std::fixed
+                << std::setprecision(2)
+                << entity.distanceToLocal
                 << '\n';
         }
 
