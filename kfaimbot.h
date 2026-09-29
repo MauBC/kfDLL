@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Windows.h>
+
 #include <cmath>
 #include <cstdint>
 
@@ -9,7 +11,7 @@
 namespace KFAimbot
 {
     // ============================================================
-    // CONFIGURACION
+    // CONFIG
     // ============================================================
 
     namespace Config
@@ -23,15 +25,20 @@ namespace KFAimbot
             (2.0f * Pi);
 
 
-        // 0.0  = no se mueve
-        // 1.0  = snap instantaneo
+        // --------------------------------------------------------
+        // CAMERA SMOOTHING
         //
-        // 0.20 = movimiento suave pero suficientemente rapido.
+        // 0.0 = no movement
+        // 1.0 = instant snap
+        //
+        // Conservamos 0.20 porque visualmente ya funciona bien.
+        // El predictor compensara parte del retraso que introduce.
+        // --------------------------------------------------------
+
         constexpr float SmoothFactor =
             0.20f;
 
 
-        // Limite vertical aproximado utilizado por UE2.
         constexpr int MinPitch =
             -16000;
 
@@ -42,6 +49,58 @@ namespace KFAimbot
 
         constexpr float MinimumHorizontalDistance =
             5.0f;
+
+
+        // ========================================================
+        // MOVEMENT PREDICTION
+        //
+        // No es prediccion balistica.
+        //
+        // Para hitscan adelantamos ligeramente el punto de aim
+        // para compensar el lag generado por SmoothFactor.
+        // ========================================================
+
+        constexpr float VelocityBlend =
+            0.45f;
+
+
+        // Si Q estuvo suelto / cambiamos de estado durante mucho
+        // tiempo, descartamos la muestra anterior.
+        constexpr float MaxSampleSeconds =
+            0.120f;
+
+
+        // Safety contra divisiones por un delta demasiado pequeño.
+        constexpr float MinSampleSeconds =
+            0.004f;
+
+
+        // Multiplicador del retraso teorico del smoothing.
+        //
+        // SmoothFactor 0.20:
+        //
+        // (1 - 0.20) / 0.20 = ~4 frames
+        //
+        // A 60 FPS:
+        // 4 * 16.6 ms ~= 66 ms.
+        constexpr float PredictionMultiplier =
+            1.05f;
+
+
+        // Nunca predecimos demasiado hacia adelante.
+        constexpr float MaxPredictionSeconds =
+            0.085f;
+
+
+        // Tampoco permitimos un desplazamiento enorme por una
+        // muestra mala, teleport o Pawn reciclado.
+        constexpr float MaxPredictionDistance =
+            100.0f;
+
+
+        // Sanity para velocidades imposibles / lecturas corruptas.
+        constexpr float MaxReasonableTargetSpeed =
+            2500.0f;
     }
 
 
@@ -60,11 +119,481 @@ namespace KFAimbot
 
 
     // ============================================================
-    // NORMALIZAR ROTATOR
+    // MOTION STATE
     //
-    // Convierte cualquier valor al rango:
+    // Solo mantenemos el target actualmente seguido.
     //
-    // -32768 .. 32767
+    // Esto es mas barato que un unordered_map porque el aimbot
+    // solamente puede apuntar a un Pawn a la vez.
+    // ============================================================
+
+    struct MotionState
+    {
+        uintptr_t pawn = 0;
+
+
+        KFCamera::Vec3 previousPosition{};
+
+
+        KFCamera::Vec3 velocity{};
+
+
+        ULONGLONG previousTick = 0;
+
+
+        bool initialized = false;
+    };
+
+
+    inline MotionState
+        gMotionState;
+
+
+    // Debug / tuning.
+    inline float
+        gLastPredictionSeconds = 0.0f;
+
+
+    inline float
+        gLastPredictionDistance = 0.0f;
+
+
+    // ============================================================
+    // HELPERS
+    // ============================================================
+
+    inline float ClampFloat(
+        float value,
+        float minimum,
+        float maximum
+    )
+    {
+        if (value < minimum)
+        {
+            return minimum;
+        }
+
+
+        if (value > maximum)
+        {
+            return maximum;
+        }
+
+
+        return value;
+    }
+
+
+    inline float LengthSquared(
+        const KFCamera::Vec3& value
+    )
+    {
+        return
+            value.x * value.x +
+            value.y * value.y +
+            value.z * value.z;
+    }
+
+
+    inline bool IsFinite(
+        const KFCamera::Vec3& value
+    )
+    {
+        return
+            std::isfinite(value.x) &&
+            std::isfinite(value.y) &&
+            std::isfinite(value.z);
+    }
+
+
+    inline void ResetMotionTracking()
+    {
+        gMotionState = {};
+
+        gLastPredictionSeconds =
+            0.0f;
+
+        gLastPredictionDistance =
+            0.0f;
+    }
+
+
+    inline void InitializeMotionTracking(
+        uintptr_t pawn,
+        const KFCamera::Vec3& position,
+        ULONGLONG now
+    )
+    {
+        gMotionState = {};
+
+
+        gMotionState.pawn =
+            pawn;
+
+
+        gMotionState.previousPosition =
+            position;
+
+
+        gMotionState.previousTick =
+            now;
+
+
+        gMotionState.initialized =
+            true;
+
+
+        gLastPredictionSeconds =
+            0.0f;
+
+
+        gLastPredictionDistance =
+            0.0f;
+    }
+
+
+    // ============================================================
+    // PREDICT AIM POINT
+    //
+    // target.headWorld sigue siendo actualmente:
+    //
+    // Pawn XYZ + EyeHeight.
+    //
+    // Cuando más adelante recuperemos HeadBone de forma segura,
+    // este predictor funcionara exactamente igual sobre el bone.
+    // ============================================================
+
+    inline KFCamera::Vec3 BuildPredictedAimPoint(
+        const KFESP::Entry& target
+    )
+    {
+        const KFCamera::Vec3 current =
+            target.headWorld;
+
+
+        gLastPredictionSeconds =
+            0.0f;
+
+
+        gLastPredictionDistance =
+            0.0f;
+
+
+        if (
+            target.pawn == 0 ||
+            !IsFinite(current)
+            )
+        {
+            ResetMotionTracking();
+
+            return current;
+        }
+
+
+        const ULONGLONG now =
+            GetTickCount64();
+
+
+        // Nuevo target:
+        // todavía no tenemos velocidad.
+        if (
+            !gMotionState.initialized ||
+            gMotionState.pawn !=
+                target.pawn
+            )
+        {
+            InitializeMotionTracking(
+                target.pawn,
+                current,
+                now
+            );
+
+
+            return current;
+        }
+
+
+        const ULONGLONG elapsedMs =
+            now -
+            gMotionState.previousTick;
+
+
+        if (elapsedMs == 0)
+        {
+            return current;
+        }
+
+
+        const float deltaSeconds =
+            static_cast<float>(
+                elapsedMs
+            ) *
+            0.001f;
+
+
+        // Q pudo haberse soltado o el juego pudo congelarse.
+        //
+        // No usamos una muestra vieja para calcular velocidad.
+        if (
+            deltaSeconds <
+                Config::MinSampleSeconds ||
+            deltaSeconds >
+                Config::MaxSampleSeconds
+            )
+        {
+            InitializeMotionTracking(
+                target.pawn,
+                current,
+                now
+            );
+
+
+            return current;
+        }
+
+
+        // ========================================================
+        // RAW VELOCITY
+        // ========================================================
+
+        KFCamera::Vec3 rawVelocity
+        {
+            (
+                current.x -
+                gMotionState.previousPosition.x
+            ) /
+            deltaSeconds,
+
+            (
+                current.y -
+                gMotionState.previousPosition.y
+            ) /
+            deltaSeconds,
+
+            (
+                current.z -
+                gMotionState.previousPosition.z
+            ) /
+            deltaSeconds
+        };
+
+
+        if (!IsFinite(rawVelocity))
+        {
+            InitializeMotionTracking(
+                target.pawn,
+                current,
+                now
+            );
+
+
+            return current;
+        }
+
+
+        const float rawSpeedSq =
+            LengthSquared(
+                rawVelocity
+            );
+
+
+        const float maxSpeedSq =
+            Config::MaxReasonableTargetSpeed *
+            Config::MaxReasonableTargetSpeed;
+
+
+        // Teleport / pointer reciclado / lectura mala.
+        if (rawSpeedSq > maxSpeedSq)
+        {
+            InitializeMotionTracking(
+                target.pawn,
+                current,
+                now
+            );
+
+
+            return current;
+        }
+
+
+        // ========================================================
+        // VELOCITY LOW-PASS FILTER
+        //
+        // Reduce jitter de la animacion / lectura de posiciones.
+        // ========================================================
+
+        const float blend =
+            Config::VelocityBlend;
+
+
+        const float inverseBlend =
+            1.0f -
+            blend;
+
+
+        gMotionState.velocity.x =
+            gMotionState.velocity.x *
+                inverseBlend +
+            rawVelocity.x *
+                blend;
+
+
+        gMotionState.velocity.y =
+            gMotionState.velocity.y *
+                inverseBlend +
+            rawVelocity.y *
+                blend;
+
+
+        gMotionState.velocity.z =
+            gMotionState.velocity.z *
+                inverseBlend +
+            rawVelocity.z *
+                blend;
+
+
+        // Actualizamos muestra para el siguiente frame.
+        gMotionState.previousPosition =
+            current;
+
+
+        gMotionState.previousTick =
+            now;
+
+
+        // ========================================================
+        // ESTIMAR EL RETRASO QUE INTRODUCE EL SMOOTHING
+        //
+        // Aproximacion de first-order smoothing:
+        //
+        // lagFrames ~= (1-alpha) / alpha
+        // ========================================================
+
+        const float smoothingLagFrames =
+            (
+                1.0f -
+                Config::SmoothFactor
+            ) /
+            Config::SmoothFactor;
+
+
+        float predictionSeconds =
+            deltaSeconds *
+            smoothingLagFrames *
+            Config::PredictionMultiplier;
+
+
+        predictionSeconds =
+            ClampFloat(
+                predictionSeconds,
+                0.0f,
+                Config::MaxPredictionSeconds
+            );
+
+
+        // ========================================================
+        // PREDICTION VECTOR
+        // ========================================================
+
+        KFCamera::Vec3 lead
+        {
+            gMotionState.velocity.x *
+                predictionSeconds,
+
+            gMotionState.velocity.y *
+                predictionSeconds,
+
+            gMotionState.velocity.z *
+                predictionSeconds
+        };
+
+
+        float leadDistanceSq =
+            LengthSquared(
+                lead
+            );
+
+
+        const float maxLead =
+            Config::MaxPredictionDistance;
+
+
+        const float maxLeadSq =
+            maxLead *
+            maxLead;
+
+
+        // Clamp espacial.
+        if (
+            leadDistanceSq >
+                maxLeadSq &&
+            leadDistanceSq >
+                0.0001f
+            )
+        {
+            const float leadDistance =
+                std::sqrt(
+                    leadDistanceSq
+                );
+
+
+            const float scale =
+                maxLead /
+                leadDistance;
+
+
+            lead.x *=
+                scale;
+
+
+            lead.y *=
+                scale;
+
+
+            lead.z *=
+                scale;
+
+
+            leadDistanceSq =
+                maxLeadSq;
+        }
+
+
+        KFCamera::Vec3 predicted
+        {
+            current.x +
+                lead.x,
+
+            current.y +
+                lead.y,
+
+            current.z +
+                lead.z
+        };
+
+
+        if (!IsFinite(predicted))
+        {
+            return current;
+        }
+
+
+        gLastPredictionSeconds =
+            predictionSeconds;
+
+
+        gLastPredictionDistance =
+            std::sqrt(
+                leadDistanceSq
+            );
+
+
+        return predicted;
+    }
+
+
+    // ============================================================
+    // NORMALIZE ROTATOR
     // ============================================================
 
     inline int NormalizeSigned16(
@@ -187,8 +716,6 @@ namespace KFAimbot
             );
 
 
-        // Evita quedarse eternamente a 1-2 rotator units
-        // del objetivo por redondeo.
         if (step == 0)
         {
             step =
@@ -209,43 +736,29 @@ namespace KFAimbot
 
 
     // ============================================================
-    // CALCULAR ROTACION DESEADA
-    //
-    // Convencion confirmada experimentalmente:
-    //
-    // X = forward
-    // Y = right
-    // Z = up
-    //
-    // Yaw:
-    //
-    // atan2(dY, dX)
-    //
-    // Pitch:
-    //
-    // atan2(dZ, horizontal)
+    // DESIRED ROTATION TO WORLD POINT
     // ============================================================
 
-    inline DesiredRotation CalculateDesiredRotation(
+    inline DesiredRotation CalculateDesiredRotationToPoint(
         const KFCamera::Snapshot& camera,
-        const KFESP::Entry& target
+        const KFCamera::Vec3& aimPoint
     )
     {
         DesiredRotation result;
 
 
         const float dx =
-            target.headWorld.x -
+            aimPoint.x -
             camera.eyeLocation.x;
 
 
         const float dy =
-            target.headWorld.y -
+            aimPoint.y -
             camera.eyeLocation.y;
 
 
         const float dz =
-            target.headWorld.z -
+            aimPoint.z -
             camera.eyeLocation.z;
 
 
@@ -306,9 +819,24 @@ namespace KFAimbot
 
 
     // ============================================================
+    // COMPATIBILITY
+    // ============================================================
+
+    inline DesiredRotation CalculateDesiredRotation(
+        const KFCamera::Snapshot& camera,
+        const KFESP::Entry& target
+    )
+    {
+        return
+            CalculateDesiredRotationToPoint(
+                camera,
+                target.headWorld
+            );
+    }
+
+
+    // ============================================================
     // APPLY AIM
-    //
-    // Solamente debe llamarse mientras Q esta presionado.
     // ============================================================
 
     inline bool ApplyAim(
@@ -321,14 +849,26 @@ namespace KFAimbot
             target.pawn == 0
             )
         {
+            ResetMotionTracking();
+
             return false;
         }
 
 
-        const DesiredRotation desired =
-            CalculateDesiredRotation(
-                camera,
+        // --------------------------------------------------------
+        // TARGET MOTION PREDICTION
+        // --------------------------------------------------------
+
+        const KFCamera::Vec3 aimPoint =
+            BuildPredictedAimPoint(
                 target
+            );
+
+
+        const DesiredRotation desired =
+            CalculateDesiredRotationToPoint(
+                camera,
+                aimPoint
             );
 
 
@@ -351,7 +891,7 @@ namespace KFAimbot
 
 
         // --------------------------------------------------------
-        // SUAVIZADO
+        // CAMERA SMOOTHING
         // --------------------------------------------------------
 
         int nextYaw =
@@ -374,14 +914,6 @@ namespace KFAimbot
             );
 
 
-        // --------------------------------------------------------
-        // UE2 usa los 16 bits bajos del Rotator.
-        //
-        // Tus lecturas reales lo confirmaron:
-        //
-        // -604 aparecia como 64932, etc.
-        // --------------------------------------------------------
-
         const int writeYaw =
             nextYaw &
             0xFFFF;
@@ -392,7 +924,6 @@ namespace KFAimbot
             0xFFFF;
 
 
-        // Escribimos Pitch primero y Yaw despues.
         const bool pitchOk =
             KFMemory::Write(
                 camera.controller +

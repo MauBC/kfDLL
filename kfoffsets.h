@@ -44,6 +44,70 @@ namespace KFOffsets
     }
 
 
+    // ============================================================
+    // UE2 REFLECTION
+    //
+    // Confirmados mediante GObjHash/UFunction/UProperty metadata.
+    // ============================================================
+
+    namespace UField
+    {
+        constexpr uintptr_t Next =
+            0x30;
+    }
+
+
+    namespace UStruct
+    {
+        constexpr uintptr_t Children =
+            0x40;
+
+        constexpr uintptr_t PropertySize =
+            0x44;
+    }
+
+
+    namespace UProperty
+    {
+        constexpr uintptr_t Offset =
+            0x4C;
+    }
+
+
+    // ============================================================
+    // KFMonster HEAD / HEADSHOT
+    //
+    // Offsets obtenidos directamente de UProperty reflection y
+    // validados en Clot + Crawler vivos.
+    // ============================================================
+
+    namespace KFMonster
+    {
+        constexpr uintptr_t HeadRadius =
+            0x494;
+
+        constexpr uintptr_t HeadHeight =
+            0x498;
+
+        constexpr uintptr_t HeadScale =
+            0x49C;
+
+        constexpr uintptr_t HeadBone =
+            0x768;
+
+        constexpr uintptr_t NeckBone =
+            0xF0C;
+
+        constexpr uintptr_t OnlineHeadshotOffset =
+            0xFB8;
+
+        constexpr uintptr_t OnlineHeadshotScale =
+            0xFC4;
+
+        constexpr uintptr_t HeadHealth =
+            0xFC8;
+    }
+
     namespace Actor
     {
         // AActor::GetViewRotation

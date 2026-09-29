@@ -1,5 +1,6 @@
-ï»¿#pragma once
+#pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
@@ -17,6 +18,29 @@ namespace KFPlayer
 
     constexpr size_t GObjHashBucketCount =
         0x1000;
+
+
+    // ============================================================
+    // LOCAL CONTROLLER CACHE
+    //
+    // FindLocalController es caro porque recorre GObjHash.
+    //
+    // El Controller normalmente permanece estable durante la
+    // partida, por lo que lo cacheamos y lo revalidamos antes
+    // de volver a escanear.
+    // ============================================================
+
+    inline std::atomic<uintptr_t>
+        gCachedLocalController{ 0 };
+
+
+    inline void InvalidateLocalControllerCache()
+    {
+        gCachedLocalController.store(
+            0,
+            std::memory_order_release
+        );
+    }
 
 
     // ============================================================
@@ -153,7 +177,7 @@ namespace KFPlayer
 
 
         // --------------------------------------------------------
-        // VerificaciÃ³n adicional mediante PRI
+        // Verificación adicional mediante PRI
         // --------------------------------------------------------
 
         uintptr_t priFromController = 0;
@@ -192,9 +216,9 @@ namespace KFPlayer
     // ENCONTRAR CONTROLLER LOCAL
     //
     // Core.dll + GObjHash
-    //        â†“
+    //        ?
     // recorrer 4096 buckets
-    //        â†“
+    //        ?
     // buscar APlayerController::vftable
     // ============================================================
 
@@ -225,6 +249,41 @@ namespace KFPlayer
             engineBase +
             KFOffsets::Global::PlayerControllerVTable;
 
+
+        // --------------------------------------------------------
+        // FAST PATH
+        //
+        // Normalmente son apenas unas lecturas.
+        // --------------------------------------------------------
+
+        const uintptr_t cachedController =
+            gCachedLocalController.load(
+                std::memory_order_acquire
+            );
+
+
+        if (cachedController != 0)
+        {
+            if (IsLocalControllerCandidate(
+                cachedController,
+                expectedVTable
+            ))
+            {
+                return
+                    cachedController;
+            }
+
+
+            // Cambio de mapa, respawn extraño o objeto destruido.
+            InvalidateLocalControllerCache();
+        }
+
+
+        // --------------------------------------------------------
+        // SLOW PATH
+        //
+        // Solo si no existe cache válido recorremos GObjHash.
+        // --------------------------------------------------------
 
         for (
             size_t bucket = 0;
@@ -264,7 +323,14 @@ namespace KFPlayer
                     )
                     )
                 {
-                    return object;
+                    gCachedLocalController.store(
+                        object,
+                        std::memory_order_release
+                    );
+
+
+                    return
+                        object;
                 }
 
 
@@ -281,7 +347,7 @@ namespace KFPlayer
                 }
 
 
-                // ProtecciÃ³n contra ciclo.
+                // Protección contra ciclo.
                 if (nextObject == object)
                 {
                     break;
@@ -440,7 +506,7 @@ namespace KFPlayer
 
 
         // --------------------------------------------------------
-        // PosiciÃ³n
+        // Posición
         // --------------------------------------------------------
 
         const bool hasX =

@@ -141,6 +141,12 @@
     <ClInclude Include="kfmemory.h" />
     <ClInclude Include="kfoffsets.h" />
     <ClInclude Include="kfplayer.h" />
+    <ClInclude Include="kfaimbot.h" />
+    <ClInclude Include="kfbones.h" />
+    <ClInclude Include="kfcamera.h" />
+    <ClInclude Include="kfesp.h" />
+    <ClInclude Include="kfoverlay.h" />
+    <ClInclude Include="kftargeting.h" />
     <ClInclude Include="MemoryDll.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />

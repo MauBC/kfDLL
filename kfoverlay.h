@@ -1364,10 +1364,10 @@ namespace KFOverlay
 
         case WM_DESTROY:
 
-            DestroyBackBuffer();
-
-            DestroyRenderResources();
-
+            // Los recursos GDI pertenecen al OverlayThread.
+            //
+            // No los destruimos aqui para evitar dos rutas de
+            // cleanup actuando sobre el mismo estado.
             PostQuitMessage(0);
 
             return 0;
@@ -1793,6 +1793,13 @@ namespace KFOverlay
         }
 
 
+        // La clase no debe quedarse registrada entre toggles.
+        UnregisterClassW(
+            ClassName,
+            dllModule
+        );
+
+
         return 0;
     }
 
@@ -1801,40 +1808,11 @@ namespace KFOverlay
     // START / STOP
     // ============================================================
 
-    inline bool Start(
-        HMODULE dllModule
-    )
-    {
-        if (gThread != nullptr)
-        {
-            return true;
-        }
+    // ============================================================
+    // THREAD LIFECYCLE
+    // ============================================================
 
-
-        gStopRequested =
-            false;
-
-
-        KFESP::ForceRefresh();
-
-
-        gThread =
-            CreateThread(
-                nullptr,
-                0,
-                OverlayThread,
-                dllModule,
-                0,
-                nullptr
-            );
-
-
-        return
-            gThread != nullptr;
-    }
-
-
-    inline void Stop()
+    inline void ReleaseStoppedThreadHandle()
     {
         if (gThread == nullptr)
         {
@@ -1842,14 +1820,17 @@ namespace KFOverlay
         }
 
 
-        gStopRequested =
-            true;
+        const DWORD result =
+            WaitForSingleObject(
+                gThread,
+                0
+            );
 
 
-        WaitForSingleObject(
-            gThread,
-            3000
-        );
+        if (result != WAIT_OBJECT_0)
+        {
+            return;
+        }
 
 
         CloseHandle(
@@ -1866,13 +1847,182 @@ namespace KFOverlay
     }
 
 
+    inline bool IsThreadAlive()
+    {
+        if (gThread == nullptr)
+        {
+            return false;
+        }
+
+
+        return
+            WaitForSingleObject(
+                gThread,
+                0
+            ) ==
+            WAIT_TIMEOUT;
+    }
+
+
+    // ============================================================
+    // START
+    // ============================================================
+
+    inline bool Start(
+        HMODULE dllModule
+    )
+    {
+        // Un thread que ya terminó puede seguir teniendo un HANDLE
+        // válido hasta que nosotros lo cerremos.
+        ReleaseStoppedThreadHandle();
+
+
+        // Nunca crear dos OverlayThread simultáneos.
+        if (gThread != nullptr)
+        {
+            return true;
+        }
+
+
+        gStopRequested =
+            false;
+
+
+        gRunning =
+            false;
+
+
+        // Un target anterior no debe sobrevivir a un reinicio
+        // completo del overlay.
+        KFTargeting::ResetLock();
+
+
+        KFAimbot::ResetMotionTracking();
+
+
+        KFESP::ForceRefresh();
+
+
+        gThread =
+            CreateThread(
+                nullptr,
+                0,
+                OverlayThread,
+                dllModule,
+                0,
+                nullptr
+            );
+
+
+        if (gThread == nullptr)
+        {
+            return false;
+        }
+
+
+        return true;
+    }
+
+
+    // ============================================================
+    // STOP
+    //
+    // IMPORTANTE:
+    //
+    // No cerramos el HANDLE hasta confirmar que el thread terminó.
+    //
+    // Si el timeout ocurre mantenemos gThread intacto. Así Toggle
+    // NO puede crear accidentalmente un segundo OverlayThread.
+    // ============================================================
+
+    inline bool Stop()
+    {
+        ReleaseStoppedThreadHandle();
+
+
+        if (gThread == nullptr)
+        {
+            gRunning =
+                false;
+
+
+            return true;
+        }
+
+
+        gStopRequested =
+            true;
+
+
+        const DWORD result =
+            WaitForSingleObject(
+                gThread,
+                5000
+            );
+
+
+        if (result != WAIT_OBJECT_0)
+        {
+            // El thread sigue siendo dueño de sus recursos.
+            //
+            // NO CloseHandle.
+            // NO gThread = nullptr.
+            //
+            // De esta manera no puede arrancar una segunda copia.
+            return false;
+        }
+
+
+        CloseHandle(
+            gThread
+        );
+
+
+        gThread =
+            nullptr;
+
+
+        gRunning =
+            false;
+
+
+        KFTargeting::ResetLock();
+
+
+        KFAimbot::ResetMotionTracking();
+
+
+        KFESP::ForceRefresh();
+
+
+        return true;
+    }
+
+
+    // ============================================================
+    // TOGGLE
+    // ============================================================
+
     inline bool Toggle(
         HMODULE dllModule
     )
     {
+        ReleaseStoppedThreadHandle();
+
+
         if (gThread != nullptr)
         {
-            Stop();
+            const bool stopped =
+                Stop();
+
+
+            // Si no terminó dentro del timeout consideramos que
+            // sigue activo y, crucialmente, NO creamos otro.
+            if (!stopped)
+            {
+                return true;
+            }
+
 
             return false;
         }
@@ -1882,7 +2032,6 @@ namespace KFOverlay
             dllModule
         );
     }
-
 
     // ============================================================
     // HEAD MARKER

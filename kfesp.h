@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 #include "kfcamera.h"
@@ -65,6 +66,25 @@ namespace KFESP
 
         std::string className;
 
+
+        // --------------------------------------------------------
+        // HEADSHOT OFFSET LOCAL
+        //
+        // KFMonster::OnlineHeadshotOffset
+        //
+        // Se lee en RefreshEnemyCache, no cada frame.
+        // --------------------------------------------------------
+
+        float headOffsetX = 0.0f;
+
+        float headOffsetY = 0.0f;
+
+        float headOffsetZ = 0.0f;
+
+
+        bool hasHeadshotOffset = false;
+
+
         // No tenemos todavia un offset MaxHealth confirmado.
         //
         // Guardamos el mayor Health confiable observado para ese
@@ -111,6 +131,14 @@ namespace KFESP
         float distance = 0.0f;
 
         float eyeHeight = 0.0f;
+
+
+        // true:
+        //     OnlineHeadshotOffset rotado a world-space.
+        //
+        // false:
+        //     fallback clásico Pawn.Z + EyeHeight.
+        bool headFromHeadshotOffset = false;
 
 
         KFCamera::Vec3 feetWorld;
@@ -171,6 +199,162 @@ namespace KFESP
         return value;
     }
 
+
+    // ============================================================
+    // HEADSHOT OFFSET HELPERS
+    // ============================================================
+
+    inline bool IsReasonableHeadshotOffset(
+        float x,
+        float y,
+        float z
+    )
+    {
+        if (
+            !std::isfinite(x) ||
+            !std::isfinite(y) ||
+            !std::isfinite(z)
+            )
+        {
+            return false;
+        }
+
+
+        constexpr float MaxComponent =
+            512.0f;
+
+
+        if (
+            std::fabs(x) > MaxComponent ||
+            std::fabs(y) > MaxComponent ||
+            std::fabs(z) > MaxComponent
+            )
+        {
+            return false;
+        }
+
+
+        // Un vector completamente cero normalmente significa
+        // que no tenemos una configuracion útil.
+        return
+            std::fabs(x) +
+            std::fabs(y) +
+            std::fabs(z) >
+            0.01f;
+    }
+
+
+    inline bool BuildHeadshotWorld(
+        const CachedEnemy& cached,
+        float pawnX,
+        float pawnY,
+        float pawnZ,
+        KFCamera::Vec3& result
+    )
+    {
+        result = {};
+
+
+        if (
+            cached.pawn == 0 ||
+            !cached.hasHeadshotOffset
+            )
+        {
+            return false;
+        }
+
+
+        int pawnYaw = 0;
+
+
+        if (!KFMemory::Read(
+            cached.pawn +
+            KFOffsets::Actor::Yaw,
+            pawnYaw
+        ))
+        {
+            return false;
+        }
+
+
+        // UE2:
+        //
+        // 65536 rotator units = 360 degrees.
+        //
+        // Para sin/cos podemos trabajar directamente con
+        // 0..65535; no necesitamos convertirlo a signed.
+        const unsigned int normalizedYaw =
+            static_cast<unsigned int>(
+                pawnYaw
+            ) &
+            0xFFFFu;
+
+
+        constexpr float TwoPi =
+            6.28318530717958647692f;
+
+
+        constexpr float RotatorToRadians =
+            TwoPi /
+            65536.0f;
+
+
+        const float radians =
+            static_cast<float>(
+                normalizedYaw
+            ) *
+            RotatorToRadians;
+
+
+        const float cosYaw =
+            std::cos(
+                radians
+            );
+
+
+        const float sinYaw =
+            std::sin(
+                radians
+            );
+
+
+        // UE2 local coordinates:
+        //
+        // X = forward
+        // Y = right
+        // Z = up
+        const float worldDX =
+            cached.headOffsetX *
+                cosYaw -
+            cached.headOffsetY *
+                sinYaw;
+
+
+        const float worldDY =
+            cached.headOffsetX *
+                sinYaw +
+            cached.headOffsetY *
+                cosYaw;
+
+
+        result =
+        {
+            pawnX +
+                worldDX,
+
+            pawnY +
+                worldDY,
+
+            pawnZ +
+                cached.headOffsetZ
+        };
+
+
+        return
+            std::isfinite(result.x) &&
+            std::isfinite(result.y) &&
+            std::isfinite(result.z);
+    }
 
     // ZombieClot_STANDARD -> Clot
     // ZombieGorefast_STANDARD -> Gorefast
@@ -279,6 +463,29 @@ namespace KFESP
         }
 
 
+        // Lookup O(1) promedio para conservar MaxHealth entre
+        // refreshes. Evita recorrer oldCache por cada enemigo.
+        std::unordered_map<uintptr_t, int>
+            oldHealthByPawn;
+
+
+        oldHealthByPawn.reserve(
+            oldCache.size()
+        );
+
+
+        for (
+            const CachedEnemy& oldEnemy :
+            oldCache
+            )
+        {
+            oldHealthByPawn[
+                oldEnemy.pawn
+            ] =
+                oldEnemy.maxObservedHealth;
+        }
+
+
         std::vector<CachedEnemy> newCache;
 
 
@@ -312,6 +519,71 @@ namespace KFESP
                 entity.className;
 
 
+            // ====================================================
+            // HEADSHOT OFFSET
+            //
+            // FVector:
+            //
+            // +00 X
+            // +04 Y
+            // +08 Z
+            //
+            // Se cachea porque estos valores son configuración del
+            // tipo de Zed y no necesitamos releerlos a 60 FPS.
+            // ====================================================
+
+            float headOffsetX = 0.0f;
+            float headOffsetY = 0.0f;
+            float headOffsetZ = 0.0f;
+
+
+            const bool headOffsetRead =
+                KFMemory::Read(
+                    entity.pawn +
+                    KFOffsets::KFMonster::OnlineHeadshotOffset +
+                    0x00,
+                    headOffsetX
+                ) &&
+                KFMemory::Read(
+                    entity.pawn +
+                    KFOffsets::KFMonster::OnlineHeadshotOffset +
+                    0x04,
+                    headOffsetY
+                ) &&
+                KFMemory::Read(
+                    entity.pawn +
+                    KFOffsets::KFMonster::OnlineHeadshotOffset +
+                    0x08,
+                    headOffsetZ
+                );
+
+
+            if (
+                headOffsetRead &&
+                IsReasonableHeadshotOffset(
+                    headOffsetX,
+                    headOffsetY,
+                    headOffsetZ
+                )
+                )
+            {
+                enemy.headOffsetX =
+                    headOffsetX;
+
+
+                enemy.headOffsetY =
+                    headOffsetY;
+
+
+                enemy.headOffsetZ =
+                    headOffsetZ;
+
+
+                enemy.hasHeadshotOffset =
+                    true;
+            }
+
+
             if (entity.healthReliable)
             {
                 enemy.maxObservedHealth =
@@ -323,24 +595,22 @@ namespace KFESP
             // Conservar MaxHealth observado entre refreshes.
             // ----------------------------------------------------
 
-            for (
-                const CachedEnemy& oldEnemy :
-                oldCache
+            const auto oldHealth =
+                oldHealthByPawn.find(
+                    enemy.pawn
+                );
+
+
+            if (
+                oldHealth !=
+                oldHealthByPawn.end()
                 )
             {
-                if (
-                    oldEnemy.pawn ==
-                    enemy.pawn
-                    )
-                {
-                    enemy.maxObservedHealth =
-                        std::max(
-                            enemy.maxObservedHealth,
-                            oldEnemy.maxObservedHealth
-                        );
-
-                    break;
-                }
+                enemy.maxObservedHealth =
+                    std::max(
+                        enemy.maxObservedHealth,
+                        oldHealth->second
+                    );
             }
 
 
@@ -432,6 +702,68 @@ namespace KFESP
         const std::vector<Entry>& entries
     )
     {
+        if (entries.empty())
+        {
+            return;
+        }
+
+
+        std::unordered_map<uintptr_t, int>
+            observedHealth;
+
+
+        observedHealth.reserve(
+            entries.size()
+        );
+
+
+        for (
+            const Entry& entry :
+            entries
+            )
+        {
+            if (
+                entry.pawn == 0 ||
+                !entry.healthReliable
+                )
+            {
+                continue;
+            }
+
+
+            auto iterator =
+                observedHealth.find(
+                    entry.pawn
+                );
+
+
+            if (
+                iterator ==
+                observedHealth.end()
+                )
+            {
+                observedHealth.emplace(
+                    entry.pawn,
+                    entry.health
+                );
+            }
+            else if (
+                entry.health >
+                iterator->second
+                )
+            {
+                iterator->second =
+                    entry.health;
+            }
+        }
+
+
+        if (observedHealth.empty())
+        {
+            return;
+        }
+
+
         std::lock_guard<std::mutex> lock(
             gEnemyCacheMutex
         );
@@ -442,36 +774,24 @@ namespace KFESP
             gEnemyCache
             )
         {
-            for (
-                const Entry& entry :
-                entries
+            const auto iterator =
+                observedHealth.find(
+                    cached.pawn
+                );
+
+
+            if (
+                iterator !=
+                    observedHealth.end() &&
+                iterator->second >
+                    cached.maxObservedHealth
                 )
             {
-                if (
-                    cached.pawn !=
-                    entry.pawn
-                    )
-                {
-                    continue;
-                }
-
-
-                if (
-                    entry.healthReliable &&
-                    entry.health >
-                    cached.maxObservedHealth
-                    )
-                {
-                    cached.maxObservedHealth =
-                        entry.health;
-                }
-
-
-                break;
+                cached.maxObservedHealth =
+                    iterator->second;
             }
         }
     }
-
 
     // ============================================================
     // CONSTRUIR ESP FRAME
@@ -732,6 +1052,10 @@ namespace KFESP
             };
 
 
+            // ----------------------------------------------------
+            // FALLBACK SEGURO
+            // ----------------------------------------------------
+
             entry.headWorld =
             {
                 x,
@@ -739,6 +1063,39 @@ namespace KFESP
                 z +
                 entry.eyeHeight
             };
+
+
+            // ----------------------------------------------------
+            // KF HEADSHOT CENTER
+            //
+            // Validado empiricamente contra GetBoneCoords("head"):
+            //
+            // Fleshpound ~6.8 uu de error
+            // Scrake     ~5.5 uu de error
+            //
+            // No usamos OnlineHeadshotScale aqui. El offset por sí
+            // solo ya representa correctamente la posición central.
+            // ----------------------------------------------------
+
+            KFCamera::Vec3
+                headshotWorld;
+
+
+            if (BuildHeadshotWorld(
+                cached,
+                x,
+                y,
+                z,
+                headshotWorld
+            ))
+            {
+                entry.headWorld =
+                    headshotWorld;
+
+
+                entry.headFromHeadshotOffset =
+                    true;
+            }
 
 
             // ====================================================
@@ -1012,6 +1369,18 @@ namespace KFESP
             std::cout
                 << "  EyeHeight: "
                 << entry.eyeHeight
+                << '\n';
+
+
+            std::cout
+                << "  HeadSrc  : "
+                << (
+                    entry.headFromHeadshotOffset
+                        ?
+                        "HEADSHOT_OFFSET"
+                        :
+                        "EYE_HEIGHT"
+                    )
                 << '\n';
 
 
