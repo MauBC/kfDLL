@@ -12,6 +12,8 @@
 #include "kfcollision.h"
 #include "kfgamethread.h"
 #include "kfesp.h"
+#include "kfxray.h"
+#include "kftargetsnapshot.h"
 #include "kfoverlay.h"
 
 
@@ -60,8 +62,8 @@ namespace KFHelper
             << "[+] DLL cargada correctamente\n"
             << "[+] F6     = debug ciclico\n"
             << "             Player -> Entities -> Camera\n"
-            << "             -> Projection -> LOS -> Runtime\n"
-            << "[+] F7     = ESP + LOS + AimFOV ON/OFF\n"
+            << "             -> Projection -> LOS -> Runtime -> Glow\n"
+            << "[+] F7     = ESP + LOS + Glow + AimFOV ON/OFF\n"
             << "[+] F8     = head marker ON/OFF\n"
             << "[+] Q hold = smooth aimbot\n"
             << "[+] DELETE = descarga segura\n"
@@ -344,7 +346,7 @@ namespace KFHelper
             << "\n========================================\n"
             << "             DEBUG PAGE "
             << (page + 1)
-            << "/6\n"
+            << "/7\n"
             << "========================================\n";
 
 
@@ -405,7 +407,7 @@ namespace KFHelper
             break;
 
 
-        default:
+        case 5:
 
             std::cout
                 << "[DEBUG] RUNTIME\n";
@@ -416,12 +418,29 @@ namespace KFHelper
             );
 
             break;
+
+
+        default:
+
+            std::cout
+                << "[DEBUG] GLOW SNAPSHOT\n";
+
+
+            KFXRay::PrintStatus();
+
+            KFXRay::PrintBridgeStatus();
+
+            KFXRay::PrintDipStatus();
+
+            KFTargetSnapshot::PrintStatus();
+
+            break;
         }
 
 
         page =
             (page + 1) %
-            6;
+            7;
     }
 
 
@@ -477,6 +496,22 @@ namespace KFHelper
             << '\n';
 
 
+        const bool bridgeInstalled =
+            KFXRay::InstallBridge();
+
+
+        std::cout
+            << "[GLOW] UE2 render bridge: "
+            << (
+                bridgeInstalled
+                    ?
+                    "INSTALLED"
+                    :
+                    "FAILED"
+            )
+            << '\n';
+
+
         // --------------------------------------------------------
         // SHUTDOWN STATE
         //
@@ -489,11 +524,44 @@ namespace KFHelper
             false;
 
 
+        bool gameThreadUninstallRequested =
+            false;
+
+
         while (true)
         {
             if (shutdownPending)
             {
-                if (KFGameThread::IsSafeToUnload())
+                // Primero debe desaparecer el bridge UE2.
+                //
+                // Mientras siga instalado conservamos el callback
+                // del game thread para que OnGameFrame pueda
+                // atender RequestBridgeUninstall().
+                if (
+                    !gameThreadUninstallRequested &&
+                    !KFXRay::IsBridgeInstalled() &&
+                    !KFXRay::IsDipInstalled()
+                    )
+                {
+                    KFGameThread::SetFrameCallback(
+                        nullptr
+                    );
+
+
+                    KFGameThread::RequestUninstall();
+
+
+                    gameThreadUninstallRequested =
+                        true;
+                }
+
+
+                if (
+                    gameThreadUninstallRequested &&
+                    KFXRay::IsBridgeSafeToUnload() &&
+                    KFXRay::IsDipSafeToUnload() &&
+                    KFGameThread::IsSafeToUnload()
+                    )
                 {
                     break;
                 }
@@ -538,13 +606,20 @@ namespace KFHelper
                 );
 
 
+                KFXRay::SetEnabled(
+                    active &&
+                    KFGameThread::IsInstalled() &&
+                    KFXRay::IsBridgeInstalled()
+                );
+
+
                 std::cout
                     << (
                         active
                             ?
-                            "\n[ESP] Overlay + LOS activados.\n"
+                            "\n[ESP] Overlay + LOS + Glow activados.\n"
                             :
-                            "\n[ESP] Overlay + LOS desactivados.\n"
+                            "\n[ESP] Overlay + LOS + Glow desactivados.\n"
                     );
 
 
@@ -556,6 +631,17 @@ namespace KFHelper
                     std::cout
                         << "[LOS] Hook no disponible; "
                         << "ESP clasico activo.\n";
+                }
+
+
+                if (
+                    active &&
+                    !KFXRay::IsBridgeInstalled()
+                    )
+                {
+                    std::cout
+                        << "[GLOW] Render bridge no disponible; "
+                        << "Glow desactivado.\n";
                 }
             }
 
@@ -596,6 +682,14 @@ namespace KFHelper
                 );
 
 
+                KFXRay::SetEnabled(
+                    false
+                );
+
+
+                KFTargetSnapshot::Clear();
+
+
                 // 2. Detener OverlayThread.
                 //
                 // Si sigue vivo NO podemos descargar MemoryDll,
@@ -614,37 +708,23 @@ namespace KFHelper
                 }
 
 
-                // 3. Evitar nuevas callbacks propias mientras
-                // esperamos que MasterProcessPostRender retire
-                // fisicamente el JMP.
+                // 3. Pedimos retirar primero el bridge UE2.
+                //
+                // KFCollision::OnGameFrame lo procesara desde el
+                // game thread incluso aunque LOS ya este OFF.
 
-                KFGameThread::SetFrameCallback(
-                    nullptr
-                );
+                KFXRay::RequestDipUninstall();
 
-
-                // 4. La restauracion de los bytes se hace desde
-                // el propio game thread.
-
-                KFGameThread::RequestUninstall();
+                KFXRay::RequestBridgeUninstall();
 
 
                 shutdownPending =
                     true;
 
 
-                // Si el hook nunca estuvo instalado, podemos salir
-                // inmediatamente.
-
-                if (KFGameThread::IsSafeToUnload())
-                {
-                    break;
-                }
-
-
                 std::cout
-                    << "\n[UNLOAD] Esperando al siguiente PostRender "
-                    << "para retirar el hook...\n";
+                    << "\n[UNLOAD] Esperando PostRender para retirar "
+                    << "UE2 render bridge...\n";
             }
 
 
@@ -657,6 +737,23 @@ namespace KFHelper
         // ========================================================
         // FINAL CLEANUP
         // ========================================================
+
+        KFXRay::SetEnabled(
+            false
+        );
+
+
+        KFXRay::ClearBlockedPawns();
+
+
+        KFTargetSnapshot::Clear();
+
+
+        KFXRay::FinalizeDipHook();
+
+
+        KFXRay::FinalizeBridge();
+
 
         KFCollision::Clear();
 

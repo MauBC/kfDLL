@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <atomic>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -11,7 +12,9 @@
 #include <vector>
 
 #include "kfesp.h"
+#include "kfxray.h"
 #include "kftargeting.h"
+#include "kftargetsnapshot.h"
 #include "kfaimbot.h"
 
 
@@ -1273,7 +1276,75 @@ namespace KFOverlay
             &camera
         ))
         {
+            // Nunca conservar un snapshot BLOCKED viejo cuando
+            // este frame no pudo reconstruir el estado del ESP.
+            KFXRay::ClearBlockedPawns();
+
+            KFTargetSnapshot::Clear();
+
             return;
+        }
+
+
+        // ========================================================
+        // GLOW SNAPSHOT
+        //
+        // Solo entra un Pawn si LOS lo conoce y esta BLOCKED:
+        //
+        //     visibilityKnown == true
+        //     visible         == false
+        //
+        // VISIBLE y UNKNOWN quedan fuera.
+        // ========================================================
+
+        if (KFXRay::IsEnabled())
+        {
+            std::array<
+                uintptr_t,
+                KFXRay::Config::MaxBlockedPawns
+            >
+                blockedPawns{};
+
+
+            size_t blockedCount =
+                0;
+
+
+            for (
+                const KFESP::Entry& entry :
+                entries
+                )
+            {
+                if (
+                    entry.pawn == 0 ||
+                    !entry.visibilityKnown ||
+                    entry.visible
+                    )
+                {
+                    continue;
+                }
+
+
+                if (
+                    blockedCount >=
+                    blockedPawns.size()
+                    )
+                {
+                    break;
+                }
+
+
+                blockedPawns[
+                    blockedCount++
+                ] =
+                    entry.pawn;
+            }
+
+
+            KFXRay::PublishBlockedPawns(
+                blockedPawns.data(),
+                blockedCount
+            );
         }
 
 
@@ -1290,6 +1361,44 @@ namespace KFOverlay
                 viewport,
                 aimHeld
             );
+
+
+        // ========================================================
+        // TARGET SNAPSHOT
+        //
+        // El overlay sigue siendo temporalmente el productor.
+        //
+        // Los futuros consumidores, incluido Silent Aim, ya no
+        // dependeran de WM_PAINT ni de KFESP::Entry directamente.
+        // ========================================================
+
+        if (
+            selection.found &&
+            selection.entryIndex <
+                entries.size()
+            )
+        {
+            const KFESP::Entry& selected =
+                entries[
+                    selection.entryIndex
+                ];
+
+
+            KFTargetSnapshot::Publish(
+                selected.pawn,
+                selected.headWorld,
+                selected.visibilityKnown,
+                selected.visible,
+                selection.locked,
+                selected.healthReliable,
+                selected.health,
+                selection.scoreSq
+            );
+        }
+        else
+        {
+            KFTargetSnapshot::Clear();
+        }
 
 
         // ========================================================
@@ -1526,27 +1635,143 @@ namespace KFOverlay
             );
 
 
+        constexpr wchar_t ClassName[] =
+            L"KFProjectESPOverlayClass";
+
+
+        // Estado inicial conocido.
+        gRunning.store(
+            false,
+            std::memory_order_release
+        );
+
+
+        gOverlayWindow =
+            nullptr;
+
+
+        // --------------------------------------------------------
+        // DPI
+        // --------------------------------------------------------
+
         DPI_AWARENESS_CONTEXT oldDpi =
             SetThreadDpiAwarenessContext(
                 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
             );
 
 
+        bool classAvailable =
+            false;
+
+
+        // ========================================================
+        // CLEANUP CENTRALIZADO
+        //
+        // Todo lo creado por OverlayThread se destruye desde
+        // OverlayThread.
+        //
+        // Esto evita rutas parciales de cleanup.
+        // ========================================================
+
+        auto cleanup =
+            [&]()
+            {
+                HWND overlay =
+                    gOverlayWindow;
+
+
+                // DestroyWindow debe ejecutarse desde el mismo
+                // thread que creo la ventana.
+                if (
+                    overlay != nullptr &&
+                    IsWindow(
+                        overlay
+                    )
+                    )
+                {
+                    DestroyWindow(
+                        overlay
+                    );
+                }
+
+
+                gOverlayWindow =
+                    nullptr;
+
+
+                // El bitmap debe salir del memory DC antes de ser
+                // eliminado. DestroyBackBuffer ya garantiza eso.
+                DestroyBackBuffer();
+
+
+                DestroyRenderResources();
+
+
+                // Ningun Pawn BLOCKED debe sobrevivir al cierre
+                // completo del OverlayThread.
+                KFXRay::ClearBlockedPawns();
+
+
+                KFTargetSnapshot::Clear();
+
+
+                // La clase pertenece exclusivamente a este overlay.
+                if (classAvailable)
+                {
+                    UnregisterClassW(
+                        ClassName,
+                        dllModule
+                    );
+
+
+                    classAvailable =
+                        false;
+                }
+
+
+                gRunning.store(
+                    false,
+                    std::memory_order_release
+                );
+
+
+                if (oldDpi != nullptr)
+                {
+                    SetThreadDpiAwarenessContext(
+                        oldDpi
+                    );
+
+
+                    oldDpi =
+                        nullptr;
+                }
+            };
+
+
+        // ========================================================
+        // GAME WINDOW
+        // ========================================================
+
         HWND gameWindow =
             KFCamera::FindGameWindow();
 
 
-        if (gameWindow == nullptr)
+        if (
+            gameWindow == nullptr ||
+            !IsWindow(
+                gameWindow
+            )
+            )
         {
-            gRunning = false;
+            cleanup();
 
             return 1;
         }
 
 
-        constexpr wchar_t ClassName[] =
-            L"KFProjectESPOverlayClass";
-
+        // ========================================================
+        // WINDOW CLASS
+        // ========================================================
 
         WNDCLASSEXW windowClass{};
 
@@ -1593,52 +1818,98 @@ namespace KFOverlay
                 ERROR_CLASS_ALREADY_EXISTS
                 )
             {
-                gRunning = false;
+                cleanup();
 
                 return 2;
             }
         }
 
 
+        // Aunque ya existiera, pertenece a nuestra clase/hInstance
+        // y podremos intentar unregister al terminar.
+        classAvailable =
+            true;
+
+
+        // ========================================================
+        // GDI
+        // ========================================================
+
         if (!CreateRenderResources())
         {
-            gRunning = false;
+            cleanup();
 
             return 3;
         }
 
 
+        // ========================================================
+        // GEOMETRIA INICIAL
+        // ========================================================
+
         RECT gameClient{};
 
 
-        GetClientRect(
+        if (!GetClientRect(
             gameWindow,
             &gameClient
-        );
+        ))
+        {
+            cleanup();
+
+            return 4;
+        }
 
 
-        POINT position
+        const int initialWidth =
+            gameClient.right -
+            gameClient.left;
+
+
+        const int initialHeight =
+            gameClient.bottom -
+            gameClient.top;
+
+
+        if (
+            initialWidth <= 0 ||
+            initialHeight <= 0
+            )
+        {
+            cleanup();
+
+            return 5;
+        }
+
+
+        POINT initialPosition
         {
             0,
             0
         };
 
 
-        ClientToScreen(
+        if (!ClientToScreen(
             gameWindow,
-            &position
-        );
+            &initialPosition
+        ))
+        {
+            cleanup();
+
+            return 6;
+        }
 
 
-        const int width =
-            gameClient.right -
-            gameClient.left;
-
-
-        const int height =
-            gameClient.bottom -
-            gameClient.top;
-
+        // ========================================================
+        // OVERLAY WINDOW
+        //
+        // Owned por Killing Floor:
+        //
+        // - acompana al juego en z-order;
+        // - no es TOPMOST global;
+        // - no recibe input;
+        // - no activa el foco.
+        // ========================================================
 
         HWND overlay =
             CreateWindowExW(
@@ -1652,11 +1923,11 @@ namespace KFOverlay
 
                 WS_POPUP,
 
-                position.x,
-                position.y,
+                initialPosition.x,
+                initialPosition.y,
 
-                width,
-                height,
+                initialWidth,
+                initialHeight,
 
                 gameWindow,
                 nullptr,
@@ -1667,11 +1938,9 @@ namespace KFOverlay
 
         if (overlay == nullptr)
         {
-            DestroyRenderResources();
+            cleanup();
 
-            gRunning = false;
-
-            return 4;
+            return 7;
         }
 
 
@@ -1679,12 +1948,18 @@ namespace KFOverlay
             overlay;
 
 
-        SetLayeredWindowAttributes(
+        // Negro puro = transparente.
+        if (!SetLayeredWindowAttributes(
             overlay,
             RGB(0, 0, 0),
             0,
             LWA_COLORKEY
-        );
+        ))
+        {
+            cleanup();
+
+            return 8;
+        }
 
 
         ShowWindow(
@@ -1698,27 +1973,33 @@ namespace KFOverlay
         );
 
 
-        gRunning =
-            true;
+        gRunning.store(
+            true,
+            std::memory_order_release
+        );
 
+
+        // ========================================================
+        // LOOP STATE
+        // ========================================================
 
         MSG message{};
 
 
         int previousX =
-            -999999;
+            initialPosition.x;
 
 
         int previousY =
-            -999999;
+            initialPosition.y;
 
 
         int previousWidth =
-            -1;
+            initialWidth;
 
 
         int previousHeight =
-            -1;
+            initialHeight;
 
 
         bool overlayVisible =
@@ -1726,14 +2007,48 @@ namespace KFOverlay
 
 
         // ========================================================
-        // ~60 FPS
+        // LOOP ~60 FPS
         // ========================================================
 
         while (
-            !gStopRequested &&
-            IsWindow(gameWindow)
+            !gStopRequested.load(
+                std::memory_order_acquire
+            )
             )
         {
+            // ----------------------------------------------------
+            // GAME WINDOW LIFETIME
+            // ----------------------------------------------------
+
+            if (
+                !IsWindow(
+                    gameWindow
+                )
+                )
+            {
+                break;
+            }
+
+
+            if (
+                !IsWindow(
+                    overlay
+                )
+                )
+            {
+                break;
+            }
+
+
+            // ----------------------------------------------------
+            // VISIBILITY
+            //
+            // No dependemos de GetForegroundWindow().
+            //
+            // Como es owned window, Windows mantiene el z-order
+            // relativo respecto a Killing Floor.
+            // ----------------------------------------------------
+
             const bool shouldBeVisible =
                 !IsIconic(
                     gameWindow
@@ -1763,65 +2078,76 @@ namespace KFOverlay
             }
 
 
+            // ----------------------------------------------------
+            // GEOMETRIA / RESIZE / MOVE
+            // ----------------------------------------------------
+
             RECT client{};
 
 
-            if (GetClientRect(
-                gameWindow,
-                &client
-            ))
+            POINT clientPosition
             {
-                POINT clientPosition
-                {
-                    0,
-                    0
-                };
+                0,
+                0
+            };
 
 
-                if (ClientToScreen(
+            const bool clientOk =
+                GetClientRect(
+                    gameWindow,
+                    &client
+                ) != FALSE;
+
+
+            const bool positionOk =
+                clientOk &&
+                ClientToScreen(
                     gameWindow,
                     &clientPosition
-                ))
+                ) != FALSE;
+
+
+            if (positionOk)
+            {
+                const int newWidth =
+                    client.right -
+                    client.left;
+
+
+                const int newHeight =
+                    client.bottom -
+                    client.top;
+
+
+                if (
+                    newWidth > 0 &&
+                    newHeight > 0 &&
+                    (
+                        clientPosition.x !=
+                            previousX ||
+                        clientPosition.y !=
+                            previousY ||
+                        newWidth !=
+                            previousWidth ||
+                        newHeight !=
+                            previousHeight
+                    )
+                    )
                 {
-                    const int newWidth =
-                        client.right -
-                        client.left;
+                    if (SetWindowPos(
+                        overlay,
+                        HWND_TOP,
 
+                        clientPosition.x,
+                        clientPosition.y,
 
-                    const int newHeight =
-                        client.bottom -
-                        client.top;
+                        newWidth,
+                        newHeight,
 
-
-                    if (
-                        newWidth > 0 &&
-                        newHeight > 0 &&
-                        (
-                            clientPosition.x !=
-                                previousX ||
-                            clientPosition.y !=
-                                previousY ||
-                            newWidth !=
-                                previousWidth ||
-                            newHeight !=
-                                previousHeight
-                        )
-                        )
+                        SWP_NOACTIVATE |
+                        SWP_NOOWNERZORDER
+                    ))
                     {
-                        SetWindowPos(
-                            overlay,
-                            HWND_TOP,
-
-                            clientPosition.x,
-                            clientPosition.y,
-
-                            newWidth,
-                            newHeight,
-
-                            SWP_NOACTIVATE
-                        );
-
-
                         previousX =
                             clientPosition.x;
 
@@ -1841,6 +2167,10 @@ namespace KFOverlay
             }
 
 
+            // ----------------------------------------------------
+            // WINDOWS MESSAGES
+            // ----------------------------------------------------
+
             while (PeekMessageW(
                 &message,
                 nullptr,
@@ -1854,7 +2184,11 @@ namespace KFOverlay
                     WM_QUIT
                     )
                 {
-                    gStopRequested = true;
+                    gStopRequested.store(
+                        true,
+                        std::memory_order_release
+                    );
+
 
                     break;
                 }
@@ -1871,7 +2205,26 @@ namespace KFOverlay
             }
 
 
-            if (shouldBeVisible)
+            if (
+                gStopRequested.load(
+                    std::memory_order_acquire
+                )
+                )
+            {
+                break;
+            }
+
+
+            // ----------------------------------------------------
+            // PAINT
+            // ----------------------------------------------------
+
+            if (
+                shouldBeVisible &&
+                IsWindow(
+                    overlay
+                )
+                )
             {
                 InvalidateRect(
                     overlay,
@@ -1886,49 +2239,21 @@ namespace KFOverlay
             }
 
 
-            Sleep(16);
-        }
-
-
-        if (IsWindow(overlay))
-        {
-            DestroyWindow(
-                overlay
+            Sleep(
+                16
             );
         }
 
 
-        DestroyBackBuffer();
+        // ========================================================
+        // CLEAN EXIT
+        // ========================================================
 
-        DestroyRenderResources();
-
-
-        gOverlayWindow =
-            nullptr;
-
-
-        gRunning =
-            false;
-
-
-        if (oldDpi != nullptr)
-        {
-            SetThreadDpiAwarenessContext(
-                oldDpi
-            );
-        }
-
-
-        // La clase no debe quedarse registrada entre toggles.
-        UnregisterClassW(
-            ClassName,
-            dllModule
-        );
+        cleanup();
 
 
         return 0;
     }
-
 
     // ============================================================
     // START / STOP
@@ -2023,6 +2348,9 @@ namespace KFOverlay
         KFTargeting::ResetLock();
 
 
+        KFTargetSnapshot::Clear();
+
+
         KFAimbot::ResetMotionTracking();
 
 
@@ -2113,6 +2441,9 @@ namespace KFOverlay
 
 
         KFTargeting::ResetLock();
+
+
+        KFTargetSnapshot::Clear();
 
 
         KFAimbot::ResetMotionTracking();

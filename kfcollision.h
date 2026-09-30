@@ -22,6 +22,7 @@
 
 #include "kfcamera.h"
 #include "kfgamethread.h"
+#include "kfxray.h"
 #include "kfmemory.h"
 #include "kfoffsets.h"
 #include "kfplayer.h"
@@ -729,6 +730,14 @@ namespace KFCollision
 
     inline void OnGameFrame()
     {
+        // Lifecycles de render se atienden incluso si LOS esta
+        // deshabilitado. Esto tambien es necesario durante DELETE.
+
+        KFXRay::ServiceDipLifecycle();
+
+        KFXRay::ServiceBridgeLifecycle();
+
+
         if (
             !IsEnabled() ||
             !KFGameThread::IsGameThread()

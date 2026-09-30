@@ -119,6 +119,33 @@ namespace KFAimbot
 
 
     // ============================================================
+    // AIM SOLUTION
+    //
+    // Separar:
+    //
+    //     calcular hacia donde apuntar
+    //
+    // de:
+    //
+    //     escribir la rotacion de la camara
+    //
+    // El futuro Silent Aim consumira una solucion sin necesidad
+    // de llamar a la ruta que modifica Pitch/Yaw del controller.
+    // ============================================================
+
+    struct AimSolution
+    {
+        uintptr_t pawn = 0;
+
+        KFCamera::Vec3 aimPoint;
+
+        DesiredRotation desired;
+
+        bool valid = false;
+    };
+
+
+    // ============================================================
     // MOTION STATE
     //
     // Solo mantenemos el target actualmente seguido.
@@ -836,10 +863,61 @@ namespace KFAimbot
 
 
     // ============================================================
-    // APPLY AIM
+    // BUILD DIRECT SOLUTION
+    //
+    // No smoothing.
+    // No memory writes.
+    // No prediction state.
     // ============================================================
 
-    inline bool ApplyAim(
+    inline AimSolution BuildAimSolutionToPoint(
+        const KFCamera::Snapshot& camera,
+        uintptr_t pawn,
+        const KFCamera::Vec3& aimPoint
+    )
+    {
+        AimSolution result;
+
+
+        if (
+            camera.controller == 0 ||
+            pawn == 0
+            )
+        {
+            return result;
+        }
+
+
+        result.pawn =
+            pawn;
+
+
+        result.aimPoint =
+            aimPoint;
+
+
+        result.desired =
+            CalculateDesiredRotationToPoint(
+                camera,
+                aimPoint
+            );
+
+
+        result.valid =
+            result.desired.valid;
+
+
+        return result;
+    }
+
+
+    // ============================================================
+    // BUILD NORMAL AIM SOLUTION
+    //
+    // Conserva exactamente la prediccion actual.
+    // ============================================================
+
+    inline AimSolution BuildAimSolution(
         const KFCamera::Snapshot& camera,
         const KFESP::Entry& target
     )
@@ -855,13 +933,9 @@ namespace KFAimbot
         {
             ResetMotionTracking();
 
-            return false;
+            return {};
         }
 
-
-        // --------------------------------------------------------
-        // TARGET MOTION PREDICTION
-        // --------------------------------------------------------
 
         const KFCamera::Vec3 aimPoint =
             BuildPredictedAimPoint(
@@ -869,14 +943,30 @@ namespace KFAimbot
             );
 
 
-        const DesiredRotation desired =
-            CalculateDesiredRotationToPoint(
+        return
+            BuildAimSolutionToPoint(
                 camera,
+                target.pawn,
                 aimPoint
             );
+    }
 
 
-        if (!desired.valid)
+    // ============================================================
+    // APPLY SOLUTION TO CAMERA
+    //
+    // Esta es la parte que Silent Aim NO utilizara.
+    // ============================================================
+
+    inline bool ApplyAimSolution(
+        const KFCamera::Snapshot& camera,
+        const AimSolution& solution
+    )
+    {
+        if (
+            camera.controller == 0 ||
+            !solution.valid
+            )
         {
             return false;
         }
@@ -894,21 +984,17 @@ namespace KFAimbot
             );
 
 
-        // --------------------------------------------------------
-        // CAMERA SMOOTHING
-        // --------------------------------------------------------
-
         int nextYaw =
             SmoothRotation(
                 currentYaw,
-                desired.yaw
+                solution.desired.yaw
             );
 
 
         int nextPitch =
             SmoothRotation(
                 currentPitch,
-                desired.pitch
+                solution.desired.pitch
             );
 
 
@@ -947,5 +1033,29 @@ namespace KFAimbot
         return
             pitchOk &&
             yawOk;
+    }
+
+
+    // ============================================================
+    // COMPATIBILITY: NORMAL SMOOTH AIM
+    // ============================================================
+
+    inline bool ApplyAim(
+        const KFCamera::Snapshot& camera,
+        const KFESP::Entry& target
+    )
+    {
+        const AimSolution solution =
+            BuildAimSolution(
+                camera,
+                target
+            );
+
+
+        return
+            ApplyAimSolution(
+                camera,
+                solution
+            );
     }
 }

@@ -35,6 +35,27 @@ namespace KFTargeting
 
 
     // ============================================================
+    // VISIBILITY POLICY
+    //
+    // LegacyAllowUnknown:
+    //     comportamiento actual del smooth aimbot.
+    //
+    // RequireKnownVisible:
+    //     futuro Silent Aim:
+    //       UNKNOWN -> reject
+    //       BLOCKED -> reject
+    //       VISIBLE -> accept
+    // ============================================================
+
+    enum class VisibilityPolicy
+    {
+        LegacyAllowUnknown,
+
+        RequireKnownVisible
+    };
+
+
+    // ============================================================
     // GLOBAL TARGET LOCK
     // ============================================================
 
@@ -161,7 +182,9 @@ namespace KFTargeting
     // ============================================================
 
     inline bool IsValidCandidate(
-        const KFESP::Entry& entry
+        const KFESP::Entry& entry,
+        VisibilityPolicy visibilityPolicy =
+            VisibilityPolicy::LegacyAllowUnknown
     )
     {
         // KFESP cachea exclusivamente Relation::Enemy.
@@ -173,20 +196,38 @@ namespace KFTargeting
         }
 
 
-        // LOS experimental:
-        //
-        // UNKNOWN -> permitido
-        // VISIBLE -> permitido
-        // BLOCKED -> rechazado
-        //
-        // Mientras SingleLineCheck siga en diagnostico no debemos
-        // romper el comportamiento historico del aimbot.
+        // --------------------------------------------------------
+        // VISIBILITY
+        // --------------------------------------------------------
+
         if (
-            entry.visibilityKnown &&
-            !entry.visible
+            visibilityPolicy ==
+            VisibilityPolicy::RequireKnownVisible
             )
         {
-            return false;
+            if (
+                !entry.visibilityKnown ||
+                !entry.visible
+                )
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // Mantener exactamente el comportamiento historico del
+            // smooth aimbot:
+            //
+            // UNKNOWN -> permitido
+            // VISIBLE -> permitido
+            // BLOCKED -> rechazado
+            if (
+                entry.visibilityKnown &&
+                !entry.visible
+                )
+            {
+                return false;
+            }
         }
 
 
@@ -311,7 +352,8 @@ namespace KFTargeting
 
     inline bool TryLockedTarget(
         const std::vector<KFESP::Entry>& entries,
-        Selection& result
+        Selection& result,
+        VisibilityPolicy visibilityPolicy
     )
     {
         if (gLockedPawn == 0)
@@ -341,7 +383,8 @@ namespace KFTargeting
 
             // El Pawn existe pero ya no es usable.
             if (!IsValidCandidate(
-                entry
+                entry,
+                visibilityPolicy
             ))
             {
                 return false;
@@ -397,7 +440,8 @@ namespace KFTargeting
 
     inline void AcquireBestTarget(
         const std::vector<KFESP::Entry>& entries,
-        Selection& result
+        Selection& result,
+        VisibilityPolicy visibilityPolicy
     )
     {
         for (
@@ -411,7 +455,8 @@ namespace KFTargeting
 
 
             if (!IsValidCandidate(
-                entry
+                entry,
+                visibilityPolicy
             ))
             {
                 continue;
@@ -465,7 +510,9 @@ namespace KFTargeting
     inline Selection FindBestTarget(
         const std::vector<KFESP::Entry>& entries,
         const KFCamera::Viewport& viewport,
-        bool lockRequested
+        bool lockRequested,
+        VisibilityPolicy visibilityPolicy =
+            VisibilityPolicy::LegacyAllowUnknown
     )
     {
         Selection result =
@@ -488,7 +535,8 @@ namespace KFTargeting
 
             AcquireBestTarget(
                 entries,
-                result
+                result,
+                visibilityPolicy
             );
 
 
@@ -504,7 +552,8 @@ namespace KFTargeting
 
         if (TryLockedTarget(
             entries,
-            result
+            result,
+            visibilityPolicy
         ))
         {
             return result;
@@ -518,7 +567,8 @@ namespace KFTargeting
         // Buscar uno nuevo dentro del FOV normal.
         AcquireBestTarget(
             entries,
-            result
+            result,
+            visibilityPolicy
         );
 
 
