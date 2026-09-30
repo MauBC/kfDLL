@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "kfcamera.h"
+#include "kfcollision.h"
 #include "kfentities.h"
 
 
@@ -139,6 +140,11 @@ namespace KFESP
         // false:
         //     fallback clásico Pawn.Z + EyeHeight.
         bool headFromHeadshotOffset = false;
+
+
+        bool visibilityKnown = false;
+
+        bool visible = false;
 
 
         KFCamera::Vec3 feetWorld;
@@ -434,6 +440,41 @@ namespace KFESP
         gEnemyCache.clear();
 
         gLastCacheRefresh = 0;
+    }
+
+
+    inline void RemoveCachedEnemy(
+        uintptr_t pawn
+    )
+    {
+        if (pawn == 0)
+        {
+            return;
+        }
+
+
+        std::lock_guard<std::mutex> lock(
+            gEnemyCacheMutex
+        );
+
+
+        gEnemyCache.erase(
+            std::remove_if(
+                gEnemyCache.begin(),
+                gEnemyCache.end(),
+
+                [pawn](
+                    const CachedEnemy& enemy
+                )
+                {
+                    return
+                        enemy.pawn ==
+                        pawn;
+                }
+            ),
+
+            gEnemyCache.end()
+        );
     }
 
 
@@ -840,6 +881,15 @@ namespace KFESP
         );
 
 
+        std::vector<KFCollision::TargetPoint>
+            losTargets;
+
+
+        losTargets.reserve(
+            enemies.size()
+        );
+
+
         for (
             const CachedEnemy& cached :
             enemies
@@ -939,12 +989,26 @@ namespace KFESP
                 );
 
 
-            // Si realmente vale cero, normalmente ya murio.
+            // Health leido correctamente y <= 0:
+            // muerto, ragdoll o Pawn en proceso de cleanup.
+            //
+            // Ademas de no crear Entry, expulsamos inmediatamente
+            // cualquier estado cacheado asociado al Pawn.
             if (
                 healthRead &&
-                entry.health == 0
+                entry.health <= 0
                 )
             {
+                RemoveCachedEnemy(
+                    cached.pawn
+                );
+
+
+                KFCollision::ForgetPawn(
+                    cached.pawn
+                );
+
+
                 continue;
             }
 
@@ -1098,6 +1162,27 @@ namespace KFESP
             }
 
 
+            if (KFCollision::IsEnabled())
+            {
+                entry.visible =
+                    KFCollision::QueryVisibility(
+                        entry.pawn,
+                        entry.visibilityKnown
+                    );
+            }
+            else
+            {
+                // Fallback:
+                // si LOS no esta activo conservamos el comportamiento
+                // anterior del ESP.
+                entry.visibilityKnown =
+                    true;
+
+                entry.visible =
+                    true;
+            }
+
+
             // ====================================================
             // WORLD TO SCREEN
             // ====================================================
@@ -1118,6 +1203,23 @@ namespace KFESP
                     viewport,
                     entry.headScreen
                 );
+
+
+            if (
+                KFCollision::IsEnabled() &&
+                entry.headProjected &&
+                entry.headScreen.depth > 1.0f &&
+                entry.headScreen.onScreen
+                )
+            {
+                losTargets.push_back(
+                    KFCollision::TargetPoint
+                    {
+                        entry.pawn,
+                        entry.headWorld
+                    }
+                );
+            }
 
 
             if (
@@ -1269,6 +1371,11 @@ namespace KFESP
         }
 
 
+        KFCollision::PublishTargets(
+            losTargets
+        );
+
+
         UpdateObservedHealth(
             entries
         );
@@ -1380,6 +1487,24 @@ namespace KFESP
                         "HEADSHOT_OFFSET"
                         :
                         "EYE_HEIGHT"
+                    )
+                << '\n';
+
+
+            std::cout
+                << "  LOS      : "
+                << (
+                    !entry.visibilityKnown
+                        ?
+                        "UNKNOWN"
+                        :
+                        (
+                            entry.visible
+                                ?
+                                "VISIBLE"
+                                :
+                                "BLOCKED"
+                        )
                     )
                 << '\n';
 

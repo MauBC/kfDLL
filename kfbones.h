@@ -8,6 +8,7 @@
 #include <string>
 
 #include "kfcamera.h"
+#include "kfgamethread.h"
 #include "kfmemory.h"
 #include "kfoffsets.h"
 
@@ -123,36 +124,22 @@ namespace KFBones
     // executes on its own thread before GetBoneCoords can run.
     // ============================================================
 
-    inline std::atomic<DWORD>
-        gGameThreadId{ 0 };
-
-
     inline void BindGameThread()
     {
-        gGameThreadId.store(
-            GetCurrentThreadId()
-        );
+        KFGameThread::BindCurrentThread();
     }
 
 
     inline void ClearGameThread()
     {
-        gGameThreadId.store(
-            0
-        );
+        KFGameThread::ClearBinding();
     }
 
 
     inline bool IsGameThread()
     {
-        const DWORD expected =
-            gGameThreadId.load();
-
-
         return
-            expected != 0 &&
-            GetCurrentThreadId() ==
-                expected;
+            KFGameThread::IsGameThread();
     }
 
 

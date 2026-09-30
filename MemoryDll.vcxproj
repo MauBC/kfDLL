@@ -144,6 +144,8 @@
     <ClInclude Include="kfaimbot.h" />
     <ClInclude Include="kfbones.h" />
     <ClInclude Include="kfcamera.h" />
+    <ClInclude Include="kfcollision.h" />
+    <ClInclude Include="kfgamethread.h" />
     <ClInclude Include="kfesp.h" />
     <ClInclude Include="kfoverlay.h" />
     <ClInclude Include="kftargeting.h" />

@@ -173,6 +173,23 @@ namespace KFTargeting
         }
 
 
+        // LOS experimental:
+        //
+        // UNKNOWN -> permitido
+        // VISIBLE -> permitido
+        // BLOCKED -> rechazado
+        //
+        // Mientras SingleLineCheck siga en diagnostico no debemos
+        // romper el comportamiento historico del aimbot.
+        if (
+            entry.visibilityKnown &&
+            !entry.visible
+            )
+        {
+            return false;
+        }
+
+
         // WorldToScreen ya descarta lo que queda detras,
         // pero conservamos la comprobacion explicita.
         if (
@@ -419,15 +436,6 @@ namespace KFTargeting
                 continue;
             }
 
-
-            // ====================================================
-            // FUTURO LOS
-            //
-            // Aqui ira:
-            //
-            // if (!HasLineOfSight(entry.pawn))
-            //     continue;
-            // ====================================================
 
 
             if (

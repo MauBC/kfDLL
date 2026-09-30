@@ -209,6 +209,87 @@ namespace KFCamera
         }
 
 
+        // --------------------------------------------------------
+        // IGNORAR CONSOLA
+        //
+        // AllocConsole() crea una ventana que pertenece al MISMO
+        // KillingFloor.exe.
+        //
+        // En modo ventana pequeño la consola puede tener mayor area
+        // que el cliente del juego y anteriormente terminaba siendo
+        // seleccionada como "gameWindow".
+        // --------------------------------------------------------
+
+        const HWND consoleWindow =
+            GetConsoleWindow();
+
+
+        if (
+            consoleWindow != nullptr &&
+            hwnd == consoleWindow
+            )
+        {
+            return TRUE;
+        }
+
+
+        // Defensa adicional para consolas Win32 clasicas.
+        wchar_t windowClass[128]{};
+
+
+        if (
+            GetClassNameW(
+                hwnd,
+                windowClass,
+                static_cast<int>(
+                    std::size(
+                        windowClass
+                    )
+                )
+            ) > 0
+            )
+        {
+            if (
+                lstrcmpiW(
+                    windowClass,
+                    L"ConsoleWindowClass"
+                ) == 0
+                )
+            {
+                return TRUE;
+            }
+        }
+
+
+        // Tambien ignoramos explicitamente nuestra consola debug
+        // por titulo en caso de que el host cambie.
+        wchar_t windowTitle[256]{};
+
+
+        if (
+            GetWindowTextW(
+                hwnd,
+                windowTitle,
+                static_cast<int>(
+                    std::size(
+                        windowTitle
+                    )
+                )
+            ) > 0
+            )
+        {
+            if (
+                lstrcmpiW(
+                    windowTitle,
+                    L"KFHelper Debug Console"
+                ) == 0
+                )
+            {
+                return TRUE;
+            }
+        }
+
+
         // Ignorar overlays/tool windows del propio proceso.
         const LONG_PTR exStyle =
             GetWindowLongPtrW(

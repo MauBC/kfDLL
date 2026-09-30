@@ -81,6 +81,9 @@ namespace KFOverlay
 
         HPEN headPen = nullptr;
 
+        // Enemigo conocido como BLOCKED por SingleLineCheck.
+        HPEN occludedPen = nullptr;
+
 
         HBRUSH healthBackground = nullptr;
 
@@ -105,8 +108,15 @@ namespace KFOverlay
     // CREATE RESOURCES
     // ============================================================
 
+    inline void DestroyRenderResources();
+
+
     inline bool CreateRenderResources()
     {
+        // Una recreacion nunca debe heredar handles anteriores.
+        DestroyRenderResources();
+
+
         gResources.enemyPen =
             CreatePen(
                 PS_SOLID,
@@ -123,7 +133,6 @@ namespace KFOverlay
             );
 
 
-        // Rojo tenue para el circulo del AimFOV.
         gResources.aimFovPen =
             CreatePen(
                 PS_SOLID,
@@ -137,6 +146,16 @@ namespace KFOverlay
                 PS_SOLID,
                 1,
                 RGB(255, 220, 70)
+            );
+
+
+        // Wallhack:
+        // enemigo confirmado como BLOCKED por LOS.
+        gResources.occludedPen =
+            CreatePen(
+                PS_SOLID,
+                2,
+                RGB(70, 185, 255)
             );
 
 
@@ -164,8 +183,7 @@ namespace KFOverlay
             );
 
 
-        // No negro puro:
-        // RGB(0,0,0) es transparente.
+        // Negro puro corresponde al color-key transparente.
         gResources.healthFrame =
             CreateSolidBrush(
                 RGB(2, 2, 2)
@@ -187,18 +205,39 @@ namespace KFOverlay
                 CLIP_DEFAULT_PRECIS,
                 ANTIALIASED_QUALITY,
                 DEFAULT_PITCH |
-                FF_DONTCARE,
+                    FF_DONTCARE,
                 L"Segoe UI"
             );
 
 
-        return
+        const bool ready =
             gResources.enemyPen != nullptr &&
             gResources.targetPen != nullptr &&
             gResources.aimFovPen != nullptr &&
-            gResources.headPen != nullptr;
-    }
+            gResources.headPen != nullptr &&
+            gResources.occludedPen != nullptr &&
 
+            gResources.healthBackground != nullptr &&
+            gResources.healthHigh != nullptr &&
+            gResources.healthMedium != nullptr &&
+            gResources.healthLow != nullptr &&
+            gResources.healthFrame != nullptr &&
+
+            gResources.font != nullptr;
+
+
+        if (!ready)
+        {
+            // CreatePen/CreateBrush/CreateFont pueden fallar de forma
+            // parcial. Nunca dejamos esos objetos vivos.
+            DestroyRenderResources();
+
+            return false;
+        }
+
+
+        return true;
+    }
 
     // ============================================================
     // DESTROY RESOURCES
@@ -234,6 +273,14 @@ namespace KFOverlay
         {
             DeleteObject(
                 gResources.headPen
+            );
+        }
+
+
+        if (gResources.occludedPen != nullptr)
+        {
+            DeleteObject(
+                gResources.occludedPen
             );
         }
 
@@ -286,9 +333,10 @@ namespace KFOverlay
         }
 
 
+        // Importantísimo:
+        // después del cleanup ningún handle viejo permanece accesible.
         gResources = {};
     }
-
 
     // ============================================================
     // BACKBUFFER
@@ -298,9 +346,11 @@ namespace KFOverlay
     {
         if (gBackBuffer.dc != nullptr)
         {
+            // Antes de destruir nuestro bitmap debe dejar de estar
+            // seleccionado dentro del memory DC.
             if (
-                gBackBuffer.oldBitmap !=
-                nullptr
+                gBackBuffer.oldBitmap != nullptr &&
+                gBackBuffer.oldBitmap != HGDI_ERROR
                 )
             {
                 SelectObject(
@@ -310,10 +360,7 @@ namespace KFOverlay
             }
 
 
-            if (
-                gBackBuffer.bitmap !=
-                nullptr
-                )
+            if (gBackBuffer.bitmap != nullptr)
             {
                 DeleteObject(
                     gBackBuffer.bitmap
@@ -338,7 +385,19 @@ namespace KFOverlay
     )
     {
         if (
+            referenceDC == nullptr ||
+            width <= 0 ||
+            height <= 0
+            )
+        {
+            return false;
+        }
+
+
+        // Ya coincide exactamente con el client area actual.
+        if (
             gBackBuffer.dc != nullptr &&
+            gBackBuffer.bitmap != nullptr &&
             gBackBuffer.width == width &&
             gBackBuffer.height == height
             )
@@ -347,22 +406,23 @@ namespace KFOverlay
         }
 
 
+        // Resize / cambio de resolucion.
         DestroyBackBuffer();
 
 
-        gBackBuffer.dc =
+        HDC newDC =
             CreateCompatibleDC(
                 referenceDC
             );
 
 
-        if (gBackBuffer.dc == nullptr)
+        if (newDC == nullptr)
         {
             return false;
         }
 
 
-        gBackBuffer.bitmap =
+        HBITMAP newBitmap =
             CreateCompatibleBitmap(
                 referenceDC,
                 width,
@@ -370,22 +430,53 @@ namespace KFOverlay
             );
 
 
-        if (
-            gBackBuffer.bitmap ==
-            nullptr
-            )
+        if (newBitmap == nullptr)
         {
-            DestroyBackBuffer();
+            DeleteDC(
+                newDC
+            );
 
             return false;
         }
 
 
-        gBackBuffer.oldBitmap =
+        HGDIOBJ oldBitmap =
             SelectObject(
-                gBackBuffer.dc,
-                gBackBuffer.bitmap
+                newDC,
+                newBitmap
             );
+
+
+        if (
+            oldBitmap == nullptr ||
+            oldBitmap == HGDI_ERROR
+            )
+        {
+            DeleteObject(
+                newBitmap
+            );
+
+
+            DeleteDC(
+                newDC
+            );
+
+
+            return false;
+        }
+
+
+        // Publicamos el estado solamente cuando TODO fue creado.
+        gBackBuffer.dc =
+            newDC;
+
+
+        gBackBuffer.bitmap =
+            newBitmap;
+
+
+        gBackBuffer.oldBitmap =
+            oldBitmap;
 
 
         gBackBuffer.width =
@@ -398,7 +489,6 @@ namespace KFOverlay
 
         return true;
     }
-
 
     // ============================================================
     // STRING
@@ -862,6 +952,13 @@ namespace KFOverlay
         bool isTarget
     )
     {
+        // ESP / wallhack y aimbot tienen responsabilidades distintas:
+        //
+        // ESP:
+        //   VISIBLE / UNKNOWN / BLOCKED -> se dibujan.
+        //
+        // AIMBOT:
+        //   KFTargeting sigue rechazando BLOCKED.
         if (
             !entry.onScreen ||
             !entry.headProjected ||
@@ -870,6 +967,11 @@ namespace KFOverlay
         {
             return;
         }
+
+
+        const bool occluded =
+            entry.visibilityKnown &&
+            !entry.visible;
 
 
         const int left =
@@ -917,7 +1019,13 @@ namespace KFOverlay
                 ?
                 gResources.targetPen
                 :
-                gResources.enemyPen;
+                (
+                    occluded
+                        ?
+                        gResources.occludedPen
+                        :
+                        gResources.enemyPen
+                );
 
 
         HGDIOBJ oldPen =
@@ -957,7 +1065,13 @@ namespace KFOverlay
                     ?
                     gResources.targetPen
                     :
-                    gResources.headPen
+                    (
+                        occluded
+                            ?
+                            gResources.occludedPen
+                            :
+                            gResources.headPen
+                    )
             );
 
 
@@ -1037,6 +1151,11 @@ namespace KFOverlay
         {
             topText
                 << L"[TARGET] ";
+        }
+        else if (occluded)
+        {
+            topText
+                << L"[WALL] ";
         }
 
 
@@ -1219,6 +1338,16 @@ namespace KFOverlay
                         DEFAULT_GUI_FONT
                     )
             );
+
+
+        // Indicador minimo para diagnosticar la propia capa GDI.
+        DrawTextShadow(
+            hdc,
+            8,
+            8,
+            L"KF ESP",
+            RGB(170, 255, 170)
+        );
 
 
         // Primero circulo AimFOV.
@@ -1513,7 +1642,6 @@ namespace KFOverlay
 
         HWND overlay =
             CreateWindowExW(
-                WS_EX_TOPMOST |
                 WS_EX_LAYERED |
                 WS_EX_TRANSPARENT |
                 WS_EX_TOOLWINDOW |
@@ -1530,7 +1658,7 @@ namespace KFOverlay
                 width,
                 height,
 
-                nullptr,
+                gameWindow,
                 nullptr,
                 dllModule,
                 nullptr
@@ -1612,9 +1740,7 @@ namespace KFOverlay
                 ) &&
                 IsWindowVisible(
                     gameWindow
-                ) &&
-                GetForegroundWindow() ==
-                    gameWindow;
+                );
 
 
             if (
@@ -1684,7 +1810,7 @@ namespace KFOverlay
                     {
                         SetWindowPos(
                             overlay,
-                            HWND_TOPMOST,
+                            HWND_TOP,
 
                             clientPosition.x,
                             clientPosition.y,

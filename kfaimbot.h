@@ -846,7 +846,11 @@ namespace KFAimbot
     {
         if (
             camera.controller == 0 ||
-            target.pawn == 0
+            target.pawn == 0 ||
+            (
+                target.visibilityKnown &&
+                !target.visible
+            )
             )
         {
             ResetMotionTracking();

@@ -86,6 +86,17 @@ namespace KFEntities
 
         int health = 0;
 
+        // true = pudimos leer Pawn::Health.
+        //
+        // Esto separa:
+        //
+        // Health == 0 real
+        //
+        // de:
+        //
+        // fallo de lectura que deja health inicializado en 0.
+        bool hasHealth = false;
+
         bool healthReliable = false;
 
 
@@ -422,14 +433,16 @@ namespace KFEntities
         // Health
         // --------------------------------------------------------
 
-        KFMemory::Read(
-            pawn +
-            KFOffsets::Pawn::Health,
-            entity.health
-        );
+        entity.hasHealth =
+            KFMemory::Read(
+                pawn +
+                KFOffsets::Pawn::Health,
+                entity.health
+            );
 
 
         entity.healthReliable =
+            entity.hasHealth &&
             entity.health > 0 &&
             entity.health <=
             Config::MaxReasonableHealth;
@@ -766,10 +779,27 @@ namespace KFEntities
             // Health raw sea absurdo.
             // ----------------------------------------------------
 
+            // Health leido correctamente y <= 0:
+            // el Pawn ya no forma parte de LivingEntities.
+            //
+            // Aunque el Controller sobreviva temporalmente durante
+            // la animacion/ragdoll, no lo tratamos como enemigo vivo.
+            if (
+                entity.hasHealth &&
+                entity.health <= 0
+                )
+            {
+                continue;
+            }
+
+
             // Pawn con vida normal positiva -> aceptado.
             //
-            // Pawn con Health raro -> solo lo conservamos si tiene Controller.
-            // Esto contempla el Gorefast raro de nuestro testmap.
+            // Health positivo pero anormal, o lectura no disponible:
+            // conservamos el fallback por Controller.
+            //
+            // Esto mantiene compatibilidad con el Gorefast raro
+            // observado durante nuestras pruebas.
             if (
                 !entity.healthReliable &&
                 entity.controller == 0

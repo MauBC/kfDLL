@@ -5,14 +5,22 @@
 #include <cstdio>
 #include <iomanip>
 #include <cstdint>
+
 #include "kfplayer.h"
 #include "kfentities.h"
 #include "kfcamera.h"
+#include "kfcollision.h"
+#include "kfgamethread.h"
 #include "kfesp.h"
 #include "kfoverlay.h"
 
+
 namespace KFHelper
 {
+    // ============================================================
+    // CONSOLE
+    // ============================================================
+
     inline bool OpenConsole()
     {
         if (!AllocConsole())
@@ -20,7 +28,9 @@ namespace KFHelper
             return false;
         }
 
+
         FILE* stream = nullptr;
+
 
         freopen_s(
             &stream,
@@ -29,6 +39,7 @@ namespace KFHelper
             stdout
         );
 
+
         freopen_s(
             &stream,
             "CONOUT$",
@@ -36,62 +47,121 @@ namespace KFHelper
             stderr
         );
 
+
         SetConsoleTitleW(
             L"KFHelper Debug Console"
         );
+
 
         std::cout
             << "========================================\n"
             << "              KF HELPER\n"
             << "========================================\n"
             << "[+] DLL cargada correctamente\n"
-            << "[+] K      = informacion del proceso\n"
-            << "[+] P      = informacion del jugador\n"
-            << "[+] E      = entidades vivas\n"
-            << "[+] R      = camera info\n"
-            << "[+] F6     = projection debug\n"
-            << "[+] F7     = ESP + AimFOV ON/OFF\n"
+            << "[+] F6     = debug ciclico\n"
+            << "             Player -> Entities -> Camera\n"
+            << "             -> Projection -> LOS -> Runtime\n"
+            << "[+] F7     = ESP + LOS + AimFOV ON/OFF\n"
             << "[+] F8     = head marker ON/OFF\n"
             << "[+] Q hold = smooth aimbot\n"
-            << "[+] DELETE = descargar DLL\n"
+            << "[+] DELETE = descarga segura\n"
             << "========================================\n\n";
+
 
         return true;
     }
+
+
+    inline void CloseConsole()
+    {
+        DWORD processList[16]{};
+
+
+        const DWORD processCount =
+            GetConsoleProcessList(
+                processList,
+                16
+            );
+
+
+        std::cout
+            << "\n========================================\n"
+            << "[-] Descargando DLL...\n"
+            << "[i] Procesos conectados a consola: "
+            << processCount
+            << '\n'
+            << "========================================\n";
+
+
+        std::cout.flush();
+        std::cerr.flush();
+
+
+        fclose(stdout);
+        fclose(stderr);
+
+
+        FreeConsole();
+    }
+
+
+    // ============================================================
+    // MODULE
+    // ============================================================
 
     inline uintptr_t GetModuleBase(
         const char* moduleName
     )
     {
-        HMODULE module =
-            GetModuleHandleA(moduleName);
+        const HMODULE module =
+            GetModuleHandleA(
+                moduleName
+            );
 
-        return reinterpret_cast<uintptr_t>(
-            module
+
+        return
+            reinterpret_cast<uintptr_t>(
+                module
             );
     }
 
+
+    // ============================================================
+    // RUNTIME INFO
+    // ============================================================
 
     inline void PrintProcessInfo(
         HMODULE dllModule
     )
     {
-        DWORD processId =
+        const DWORD processId =
             GetCurrentProcessId();
 
-        DWORD threadId =
+
+        const DWORD threadId =
             GetCurrentThreadId();
 
-        HMODULE exeBase =
-            GetModuleHandleW(nullptr);
 
-        uintptr_t engineBase =
-            GetModuleBase("Engine.dll");
+        const HMODULE exeBase =
+            GetModuleHandleW(
+                nullptr
+            );
 
-        uintptr_t coreBase =
-            GetModuleBase("Core.dll");
+
+        const uintptr_t engineBase =
+            GetModuleBase(
+                "Engine.dll"
+            );
+
+
+        const uintptr_t coreBase =
+            GetModuleBase(
+                "Core.dll"
+            );
+
 
         wchar_t exePath[MAX_PATH]{};
+
 
         GetModuleFileNameW(
             nullptr,
@@ -99,54 +169,64 @@ namespace KFHelper
             MAX_PATH
         );
 
+
         std::cout
             << "\n========================================\n"
             << "           RUNTIME SNAPSHOT\n"
             << "========================================\n";
+
 
         std::cout
             << "[PID]              "
             << processId
             << '\n';
 
+
         std::cout
             << "[Thread ID]        "
             << threadId
             << '\n';
+
 
         std::wcout
             << L"[Executable]       "
             << exePath
             << L'\n';
 
+
         std::cout
             << std::hex
             << std::uppercase
             << std::showbase;
 
+
         std::cout
             << "[EXE Base]         "
             << reinterpret_cast<uintptr_t>(
                 exeBase
-                )
+            )
             << '\n';
+
 
         std::cout
             << "[DLL Base]         "
             << reinterpret_cast<uintptr_t>(
                 dllModule
-                )
+            )
             << '\n';
+
 
         std::cout
             << "[Engine.dll Base]  "
             << engineBase
             << '\n';
 
+
         std::cout
             << "[Core.dll Base]    "
             << coreBase
             << '\n';
+
 
 #ifdef _WIN64
 
@@ -160,25 +240,24 @@ namespace KFHelper
 
 #endif
 
-        /*
-            Offset que estuvimos estudiando en Ghidra.
 
-            IMPORTANTE:
-            En TU Engine.dll, Ghidra identifico este RVA
-            como USound::Audio, NO como GEngine.
-        */
+        // En este build:
+        //
+        // Engine + 0x4C6934 = USound::Audio
+        //
+        // Se conserva solamente como referencia historica
+        // del laboratorio.
 
-        constexpr uintptr_t TEST_ENGINE_RVA =
+        constexpr uintptr_t TestEngineRva =
             0x004C6934;
+
 
         if (engineBase != 0)
         {
-            uintptr_t testAddress =
-                engineBase + TEST_ENGINE_RVA;
-
             std::cout
                 << "[Engine+4C6934]   "
-                << testAddress
+                << engineBase +
+                    TestEngineRva
                 << '\n';
         }
         else
@@ -187,10 +266,12 @@ namespace KFHelper
                 << "[Engine.dll]      NOT LOADED\n";
         }
 
+
         std::cout
             << std::dec
             << std::nouppercase
             << std::noshowbase;
+
 
         std::cout
             << "========================================\n\n";
@@ -198,155 +279,165 @@ namespace KFHelper
 
 
     // ============================================================
-    // ROTATION PROBE
+    // KEY EDGE
     //
-    // Offsets candidatos tomados de AActor::GetViewRotation.
-    // Todavia NO se consideran confirmados.
+    // GetAsyncKeyState & 1 depende del bit de transicion global
+    // de Windows y puede perder eventos.
+    //
+    // Aqui usamos el estado fisico (0x8000) y hacemos nuestro
+    // propio rising-edge dentro de MainThread.
     // ============================================================
 
-    inline void PrintRotationProbe()
+    inline bool KeyPressed(
+        int virtualKey
+    )
     {
-        KFPlayer::Context context;
-
-        if (!KFPlayer::ResolveContext(context))
+        if (
+            virtualKey < 0 ||
+            virtualKey > 255
+            )
         {
-            std::cout << "`n[ROTATION] No se pudo resolver el jugador local.`n";
-            return;
+            return false;
         }
 
-        constexpr uintptr_t CandidatePitch = 0x158;
-        constexpr uintptr_t CandidateYaw   = 0x15C;
-        constexpr uintptr_t CandidateRoll  = 0x160;
 
-        int pawnPitch = 0;
-        int pawnYaw   = 0;
-        int pawnRoll  = 0;
+        // MainThread es el unico consumidor.
+        static bool previousState[256]{};
 
-        int controllerPitch = 0;
-        int controllerYaw   = 0;
-        int controllerRoll  = 0;
 
-        const bool pawnPitchOk =
-            KFMemory::Read(
-                context.pawn + CandidatePitch,
-                pawnPitch
-            );
+        const bool isDown =
+            (
+                GetAsyncKeyState(
+                    virtualKey
+                ) &
+                0x8000
+            ) != 0;
 
-        const bool pawnYawOk =
-            KFMemory::Read(
-                context.pawn + CandidateYaw,
-                pawnYaw
-            );
 
-        const bool pawnRollOk =
-            KFMemory::Read(
-                context.pawn + CandidateRoll,
-                pawnRoll
-            );
+        const bool pressed =
+            isDown &&
+            !previousState[virtualKey];
 
-        const bool controllerPitchOk =
-            KFMemory::Read(
-                context.controller + CandidatePitch,
-                controllerPitch
-            );
 
-        const bool controllerYawOk =
-            KFMemory::Read(
-                context.controller + CandidateYaw,
-                controllerYaw
-            );
+        previousState[virtualKey] =
+            isDown;
 
-        const bool controllerRollOk =
-            KFMemory::Read(
-                context.controller + CandidateRoll,
-                controllerRoll
-            );
 
-        std::cout << "`n========================================`n";
-        std::cout << "          ROTATION PROBE`n";
-        std::cout << "========================================`n";
-
-        std::cout
-            << std::hex
-            << std::uppercase
-            << std::showbase;
-
-        std::cout
-            << "[Pawn]       "
-            << context.pawn
-            << '\n';
-
-        std::cout
-            << "[Controller] "
-            << context.controller
-            << '\n';
-
-        std::cout
-            << std::dec
-            << std::noshowbase
-            << std::nouppercase;
-
-        std::cout << "`n--- Pawn + 0x158 ---`n";
-
-        if (pawnPitchOk)
-            std::cout << "Pitch : " << pawnPitch << '\n';
-
-        if (pawnYawOk)
-            std::cout << "Yaw   : " << pawnYaw << '\n';
-
-        if (pawnRollOk)
-            std::cout << "Roll  : " << pawnRoll << '\n';
-
-        std::cout << "`n--- Controller + 0x158 ---`n";
-
-        if (controllerPitchOk)
-            std::cout << "Pitch : " << controllerPitch << '\n';
-
-        if (controllerYawOk)
-            std::cout << "Yaw   : " << controllerYaw << '\n';
-
-        if (controllerRollOk)
-            std::cout << "Roll  : " << controllerRoll << '\n';
-
-        std::cout << "========================================`n`n";
+        return pressed;
     }
 
-    inline void CloseConsole()
-    {
-        DWORD processList[16]{};
 
-        DWORD processCount =
-            GetConsoleProcessList(
-                processList,
-                16
-            );
+    // ============================================================
+    // DEBUG PAGES
+    // ============================================================
+
+    inline void PrintNextDiagnostic(
+        HMODULE dllModule
+    )
+    {
+        // MainThread es el unico escritor.
+        static unsigned int page =
+            0;
+
 
         std::cout
             << "\n========================================\n"
-            << "[-] Descargando DLL...\n"
-            << "[i] Procesos conectados a consola: "
-            << processCount
-            << '\n'
+            << "             DEBUG PAGE "
+            << (page + 1)
+            << "/6\n"
             << "========================================\n";
 
-        std::cout.flush();
-        std::cerr.flush();
 
-        fclose(stdout);
-        fclose(stderr);
+        switch (page)
+        {
+        case 0:
 
-        FreeConsole();
+            std::cout
+                << "[DEBUG] PLAYER\n";
+
+
+            KFPlayer::PrintPlayerInfo();
+
+            break;
+
+
+        case 1:
+
+            std::cout
+                << "[DEBUG] ENTITIES\n";
+
+
+            KFEntities::PrintLivingEntities();
+
+            break;
+
+
+        case 2:
+
+            std::cout
+                << "[DEBUG] CAMERA\n";
+
+
+            KFCamera::PrintCameraInfo();
+
+            break;
+
+
+        case 3:
+
+            std::cout
+                << "[DEBUG] PROJECTION\n";
+
+
+            KFESP::PrintProjectionDebug();
+
+            break;
+
+
+        case 4:
+
+            std::cout
+                << "[DEBUG] GAME THREAD / LOS\n";
+
+
+            KFCollision::PrintStatus();
+
+            break;
+
+
+        default:
+
+            std::cout
+                << "[DEBUG] RUNTIME\n";
+
+
+            PrintProcessInfo(
+                dllModule
+            );
+
+            break;
+        }
+
+
+        page =
+            (page + 1) %
+            6;
     }
 
+
+    // ============================================================
+    // MAIN THREAD
+    // ============================================================
 
     inline DWORD WINAPI MainThread(
         LPVOID parameter
     )
     {
-        HMODULE dllModule =
+        const HMODULE dllModule =
             static_cast<HMODULE>(
                 parameter
-                );
+            );
+
 
         if (!OpenConsole())
         {
@@ -356,46 +447,84 @@ namespace KFHelper
             );
         }
 
+
         PrintProcessInfo(
             dllModule
         );
 
+
+        // SingleLineCheck / GetBoneCoords y otras operaciones UE2
+        // sensibles deben ejecutarse desde el game thread.
+
+        KFGameThread::SetFrameCallback(
+            &KFCollision::OnGameFrame
+        );
+
+
+        const bool hookInstalled =
+            KFGameThread::Install();
+
+
+        std::cout
+            << "[GAME THREAD] MasterProcessPostRender: "
+            << (
+                hookInstalled
+                    ?
+                    "INSTALLED"
+                    :
+                    "FAILED"
+            )
+            << '\n';
+
+
+        // --------------------------------------------------------
+        // SHUTDOWN STATE
+        //
+        // Cuando DELETE inicia el unload no volvemos a aceptar
+        // F6/F7/F8. Esperamos solamente a que el game thread
+        // restaure los bytes originales del hook.
+        // --------------------------------------------------------
+
+        bool shutdownPending =
+            false;
+
+
         while (true)
         {
-            if (GetAsyncKeyState('K') & 1)
+            if (shutdownPending)
             {
-                PrintProcessInfo(
+                if (KFGameThread::IsSafeToUnload())
+                {
+                    break;
+                }
+
+
+                Sleep(
+                    20
+                );
+
+
+                continue;
+            }
+
+
+            // ====================================================
+            // F6 - DEBUG CYCLER
+            // ====================================================
+
+            if (KeyPressed(VK_F6))
+            {
+                PrintNextDiagnostic(
                     dllModule
                 );
             }
 
-            if (GetAsyncKeyState('P') & 1)
-            {
-                /*
-                    Aquí irá PrintPlayerInfo()
-                    cuando tengamos el puntero correcto.
-                */
 
-                KFPlayer::PrintPlayerInfo();
-            }
-            if (GetAsyncKeyState('E') & 1)
-            {
-                KFEntities::PrintLivingEntities();
-            }
+            // ====================================================
+            // F7 - OVERLAY + LOS
+            // ====================================================
 
-            if (GetAsyncKeyState('R') & 1)
-            {
-                KFCamera::PrintCameraInfo();
-            }
-
-
-            if (GetAsyncKeyState(VK_F6) & 1)
-            {
-                KFESP::PrintProjectionDebug();
-            }
-
-
-            if (GetAsyncKeyState(VK_F7) & 1)
+            if (KeyPressed(VK_F7))
             {
                 const bool active =
                     KFOverlay::Toggle(
@@ -403,16 +532,39 @@ namespace KFHelper
                     );
 
 
+                KFCollision::SetEnabled(
+                    active &&
+                    KFGameThread::IsInstalled()
+                );
+
+
                 std::cout
                     << (
-                        active ?
-                        "\n[ESP] Overlay activado.\n" :
-                        "\n[ESP] Overlay desactivado.\n"
+                        active
+                            ?
+                            "\n[ESP] Overlay + LOS activados.\n"
+                            :
+                            "\n[ESP] Overlay + LOS desactivados.\n"
                     );
+
+
+                if (
+                    active &&
+                    !KFGameThread::IsInstalled()
+                    )
+                {
+                    std::cout
+                        << "[LOS] Hook no disponible; "
+                        << "ESP clasico activo.\n";
+                }
             }
 
 
-            if (GetAsyncKeyState(VK_F8) & 1)
+            // ====================================================
+            // F8 - HEAD MARKER
+            // ====================================================
+
+            if (KeyPressed(VK_F8))
             {
                 const bool markerEnabled =
                     KFOverlay::ToggleHeadMarker();
@@ -421,23 +573,101 @@ namespace KFHelper
                 std::cout
                     << "\n[ESP] Head marker: "
                     << (
-                        markerEnabled ?
-                        "ON" :
-                        "OFF"
+                        markerEnabled
+                            ?
+                            "ON"
+                            :
+                            "OFF"
                     )
                     << '\n';
             }
 
-if (GetAsyncKeyState(VK_DELETE) & 1)
+
+            // ====================================================
+            // DELETE - SAFE UNLOAD
+            // ====================================================
+
+            if (KeyPressed(VK_DELETE))
             {
-                KFOverlay::Stop();
-                break;
+                // 1. No publicar ni ejecutar nuevo trabajo LOS.
+
+                KFCollision::SetEnabled(
+                    false
+                );
+
+
+                // 2. Detener OverlayThread.
+                //
+                // Si sigue vivo NO podemos descargar MemoryDll,
+                // porque ese thread podria seguir ejecutando codigo
+                // perteneciente al modulo descargado.
+
+                if (!KFOverlay::Stop())
+                {
+                    std::cout
+                        << "\n[UNLOAD] OverlayThread aun esta activo.\n"
+                        << "[UNLOAD] DLL NO descargada. "
+                        << "Pulsa DELETE nuevamente.\n";
+
+
+                    continue;
+                }
+
+
+                // 3. Evitar nuevas callbacks propias mientras
+                // esperamos que MasterProcessPostRender retire
+                // fisicamente el JMP.
+
+                KFGameThread::SetFrameCallback(
+                    nullptr
+                );
+
+
+                // 4. La restauracion de los bytes se hace desde
+                // el propio game thread.
+
+                KFGameThread::RequestUninstall();
+
+
+                shutdownPending =
+                    true;
+
+
+                // Si el hook nunca estuvo instalado, podemos salir
+                // inmediatamente.
+
+                if (KFGameThread::IsSafeToUnload())
+                {
+                    break;
+                }
+
+
+                std::cout
+                    << "\n[UNLOAD] Esperando al siguiente PostRender "
+                    << "para retirar el hook...\n";
             }
 
-            Sleep(50);
+
+            Sleep(
+                20
+            );
         }
 
+
+        // ========================================================
+        // FINAL CLEANUP
+        // ========================================================
+
+        KFCollision::Clear();
+
+
+        KFGameThread::SetFrameCallback(
+            nullptr
+        );
+
+
         CloseConsole();
+
 
         FreeLibraryAndExitThread(
             dllModule,
