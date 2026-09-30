@@ -15,6 +15,9 @@
 #include "kfxray.h"
 #include "kftargetsnapshot.h"
 #include "kfoverlay.h"
+#if !defined(_M_IX86)
+#error KF-PROYECT requires Killing Floor Win32/x86.
+#endif
 
 
 namespace KFHelper

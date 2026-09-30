@@ -1,4 +1,4 @@
-﻿# Visual Studio
+# Visual Studio
 .vs/
 *.user
 *.suo
@@ -52,3 +52,6 @@ KF_refactor_los_transaccional*.ps1
 01_RADIOGRAFIA_CODIGO.txt
 02_RUTAS_IMPORTANTES.txt
 03_SINGLELINECHECK_ABI_EVIDENCIA_*.txt
+
+# Context/radiography exports for AI review
+KF_*.txt

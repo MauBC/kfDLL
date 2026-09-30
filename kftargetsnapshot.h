@@ -588,11 +588,14 @@ namespace KFTargetSnapshot
     // ============================================================
 
     inline bool TryReadStrictVisible(
-        Snapshot& snapshot
+        Snapshot& snapshot,
+        ULONGLONG maxAgeMs =
+            Config::FreshnessMs
     )
     {
         if (!TryReadSnapshot(
-            snapshot
+            snapshot,
+            maxAgeMs
         ))
         {
             return false;
