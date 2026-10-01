@@ -152,6 +152,7 @@
     <ClInclude Include="kftargeting.h" />
     <ClInclude Include="kfxray.h" />
     <ClInclude Include="kftargetsnapshot.h" />
+    <ClInclude Include="kfsilentaim.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="resource.h" />

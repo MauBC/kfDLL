@@ -15,6 +15,7 @@
 #include "kfxray.h"
 #include "kftargetsnapshot.h"
 #include "kfoverlay.h"
+#include "kfsilentaim.h"
 #if !defined(_M_IX86)
 #error KF-PROYECT requires Killing Floor Win32/x86.
 #endif
@@ -68,6 +69,7 @@ namespace KFHelper
             << "             -> Projection -> LOS -> Runtime -> Glow\n"
             << "[+] F7     = ESP + LOS + Glow + AimFOV ON/OFF\n"
             << "[+] F8     = head marker ON/OFF\n"
+            << "[+] F9     = Silent Aim ON/OFF\n"
             << "[+] Q hold = smooth aimbot\n"
             << "[+] DELETE = descarga segura\n"
             << "========================================\n\n";
@@ -437,6 +439,12 @@ namespace KFHelper
 
             KFTargetSnapshot::PrintStatus();
 
+            KFSilentAim::PrintPassiveHookStatus();
+
+            KFSilentAim::PrintParamsCaptureStatus();
+
+            KFSilentAim::PrintAimMathStatus();
+
             break;
         }
 
@@ -473,6 +481,36 @@ namespace KFHelper
         PrintProcessInfo(
             dllModule
         );
+
+        KFSilentAim::PrintDiscoveryStatus();
+        KFSilentAim::PrintHookSiteStatus();
+        KFSilentAim::PrintParamsReadyStatus();
+
+        const bool silentHookInstalled =
+            KFSilentAim::InstallPassiveHook();
+
+        const bool paramsReadyHookInstalled =
+            KFSilentAim::InstallParamsReadyHook();
+
+
+        std::cout
+            << "[SILENT AIM] Params-ready hook: "
+            << (
+                paramsReadyHookInstalled
+                    ? "INSTALLED"
+                    : "FAILED"
+            )
+            << '\n';
+
+
+        std::cout
+            << "[SILENT AIM] Passive hook: "
+            << (
+                silentHookInstalled
+                    ? "INSTALLED"
+                    : "FAILED"
+            )
+            << '\n';
 
 
         // SingleLineCheck / GetBoneCoords y otras operaciones UE2
@@ -535,6 +573,22 @@ namespace KFHelper
         {
             if (shutdownPending)
             {
+
+                if (
+                    KFSilentAim::ParamsReadyHookUninstallRequested()
+                    )
+                {
+                    KFSilentAim::UninstallParamsReadyHookNow();
+                }
+
+
+                if (
+                    KFSilentAim::PassiveHookUninstallRequested()
+                    )
+                {
+                    KFSilentAim::UninstallPassiveHookNow();
+                }
+
                 // Primero debe desaparecer el bridge UE2.
                 //
                 // Mientras siga instalado conservamos el callback
@@ -563,7 +617,9 @@ namespace KFHelper
                     gameThreadUninstallRequested &&
                     KFXRay::IsBridgeSafeToUnload() &&
                     KFXRay::IsDipSafeToUnload() &&
-                    KFGameThread::IsSafeToUnload()
+                    KFGameThread::IsSafeToUnload() &&
+                    KFSilentAim::IsPassiveHookSafeToUnload() &&
+                    KFSilentAim::IsParamsReadyHookSafeToUnload()
                     )
                 {
                     break;
@@ -676,8 +732,33 @@ namespace KFHelper
             // DELETE - SAFE UNLOAD
             // ====================================================
 
+                        // ====================================================
+            // F9 - SILENT AIM
+            // ====================================================
+
+            if (KeyPressed(VK_F9))
+            {
+                const bool enabled =
+                    KFSilentAim::ToggleSilentAim();
+
+                std::cout
+                    << "\n[SILENT AIM] "
+                    << (
+                        enabled
+                            ? "ON"
+                            : "OFF"
+                    )
+                    << '\n';
+            }
+
+
             if (KeyPressed(VK_DELETE))
             {
+
+                KFSilentAim::SetSilentAimEnabled(
+                    false
+                );
+
                 // 1. No publicar ni ejecutar nuevo trabajo LOS.
 
                 KFCollision::SetEnabled(
@@ -720,6 +801,10 @@ namespace KFHelper
 
                 KFXRay::RequestBridgeUninstall();
 
+                KFSilentAim::RequestParamsReadyHookUninstall();
+
+                KFSilentAim::RequestPassiveHookUninstall();
+
 
                 shutdownPending =
                     true;
@@ -756,6 +841,10 @@ namespace KFHelper
 
 
         KFXRay::FinalizeBridge();
+
+        KFSilentAim::FinalizeParamsReadyHook();
+
+        KFSilentAim::FinalizePassiveHook();
 
 
         KFCollision::Clear();
