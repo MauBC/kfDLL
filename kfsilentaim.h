@@ -15,6 +15,7 @@
 
 #include "kfmemory.h"
 #include "kfoffsets.h"
+#include "kffireregistry.h"
 #include "kftargetsnapshot.h"
 #include "kfaimbot.h"
 
@@ -1481,7 +1482,7 @@ inline void __cdecl ObserveParamsReady(
         }
 
 
-        if (function != gDoTraceFunction)
+        if (!KFFireRegistry::IsDoTraceFunction(function))
         {
             return;
         }

@@ -16,6 +16,7 @@
 #include "kftargetsnapshot.h"
 #include "kfoverlay.h"
 #include "kfsilentaim.h"
+#include "kfweaponprofile.h"
 #if !defined(_M_IX86)
 #error KF-PROYECT requires Killing Floor Win32/x86.
 #endif
@@ -64,6 +65,7 @@ namespace KFHelper
             << "              KF HELPER\n"
             << "========================================\n"
             << "[+] DLL cargada correctamente\n"
+            << "[+] F5     = Weapon Profile\n"
             << "[+] F6     = debug ciclico\n"
             << "             Player -> Entities -> Camera\n"
             << "             -> Projection -> LOS -> Runtime -> Glow\n"
@@ -482,7 +484,23 @@ namespace KFHelper
             dllModule
         );
 
-        KFSilentAim::PrintDiscoveryStatus();
+                const bool fireRegistryReady =
+            KFFireRegistry::Initialize();
+
+
+        std::cout
+            << "[FIRE REGISTRY] "
+            << (
+                fireRegistryReady
+                    ? "READY"
+                    : "FAILED"
+            )
+            << '\n';
+
+
+        KFFireRegistry::PrintStatus();
+
+KFSilentAim::PrintDiscoveryStatus();
         KFSilentAim::PrintHookSiteStatus();
         KFSilentAim::PrintParamsReadyStatus();
 
@@ -638,6 +656,16 @@ namespace KFHelper
             // ====================================================
             // F6 - DEBUG CYCLER
             // ====================================================
+
+                        // ====================================================
+            // F5 - WEAPON PROFILE
+            // ====================================================
+
+            if (KeyPressed(VK_F5))
+            {
+                KFWeaponProfile::PrintCurrentWeaponProfile();
+            }
+
 
             if (KeyPressed(VK_F6))
             {
